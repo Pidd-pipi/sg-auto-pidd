@@ -1069,7 +1069,11 @@ class QueueManager:
         marker = "-candidate-"
         if marker in remainder:
             return remainder.split(marker, 1)[0]
-        return remainder
+        # Only candidate containers consume the scheduler's task/container
+        # budget.  Infrastructure containers such as ``*-test-minio`` /
+        # ``*-test-mysql`` also use the sologsb- prefix, but counting each one as
+        # a task group can fill maxTasks and stop all real work.
+        return ""
 
     @classmethod
     def _platform_job_group(cls, job: dict[str, Any]) -> str:

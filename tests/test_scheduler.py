@@ -162,6 +162,21 @@ class ContainerGateTests(SchedulerTestCase):
             for index in range(1, count + 1)
         ]
 
+    def test_non_candidate_sologsb_containers_do_not_fill_capacity(self):
+        queue = self._queue([
+            {"name": "sologsb-gb131-test-minio", "state": "running"},
+            {"name": "sologsb-gb131-test-mysql", "state": "running"},
+            {"name": "sologsb-gb131-test-redis", "state": "running"},
+        ], maxContainers=4, candidatesPerTask=2, containerRefillBelow=4)
+
+        with queue._lock:
+            capacity_in_use, detail = queue._capacity_usage_locked(queue._startup_timeout())
+
+        self.assertEqual(capacity_in_use, 0)
+        self.assertEqual(detail["nonTestContainerCount"], 0)
+        self.assertEqual(detail["estimatedNonTestContainers"], 0)
+        self.assertEqual(detail["containerGroups"], [])
+
     def test_one_free_slot_is_enough_to_start(self):
         """The executor queues overflow, so the monitor need not fit the batch.
 
