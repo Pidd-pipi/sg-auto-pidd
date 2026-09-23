@@ -736,6 +736,13 @@ class SchedulerService:
             project = payload.get("project")
             if not isinstance(project, dict):
                 raise MonitorError("缺少平台项目数据")
+            project_code = str(project.get("code") or "").strip()
+            try:
+                occupied = self.platform.occupied_project_codes()
+            except Exception as exc:
+                raise MonitorError(f"读取项目占用状态失败，暂不入队: {exc}") from exc
+            if project_code and project_code.casefold() in occupied:
+                raise MonitorError(f"项目 {project_code} 仍被占用（项目锁或运行中任务），不能入队")
             settings = self.settings.get() if self.settings is not None else {}
             folder_id = str(payload.get("folderId") or settings.get("defaultFolderId") or "")
             folder = self.folders.get(folder_id) if folder_id else None

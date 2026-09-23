@@ -104,6 +104,26 @@ class PlatformProvider:
             raise MonitorError(f"无法加载 Solo Manager 适配器: {exc}") from exc
         return platform_bridge, project_claims
 
+    def occupied_project_codes(self) -> set[str]:
+        """Codes the skill would refuse at ``init``: live claims or running tasks.
+
+        Offline check (no Manager login) so manual enqueue can use it cheaply.
+        """
+        _pb, claims = self._modules()
+        codes: set[str] = set()
+        sweep = getattr(claims, "sweep_finished_claims", None)
+        for base_url in discover_manager_base_urls(self.config):
+            if sweep is not None:
+                try:
+                    sweep(base_url)
+                except Exception:
+                    pass
+            codes |= set(claims.claimed_project_codes(base_url))
+        roots = self.config.get("roots") or []
+        workdir = Path(str(roots[0])) if roots else None
+        running_codes, _source = claims.running_container_project_codes(workdir)
+        return codes | set(running_codes)
+
     # -- authentication --------------------------------------------------- #
     def _auth_cfg(self) -> dict[str, Any]:
         return self.config.get("platform") or {}
@@ -312,6 +332,12 @@ class PlatformProvider:
         roots = self.config.get("roots") or []
         if roots:
             workdir = Path(str(roots[0]))
+        sweep = getattr(claims, "sweep_finished_claims", None)
+        if sweep is not None:
+            try:
+                sweep(base_url)
+            except Exception:
+                pass
         try:
             running_codes, running_source = claims.running_container_project_codes(workdir)
             claim_codes = claims.claimed_project_codes(base_url)

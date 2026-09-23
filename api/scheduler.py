@@ -107,7 +107,9 @@ MIN_LAUNCH_SPACING_SECONDS = 20
 # is only closed by the monitor once its state file has been quiet this long,
 # so an executor mid-write is never raced.
 STALE_TASK_CLOSE_MIN_AGE_SECONDS = 120
-# project_claims._task_is_active: these keep a project locked in the skill.
+# project_claims._task_is_active before skill 1.3.0: these keep a project locked
+# in the skill.  1.3.0+ only counts a live ``running`` runner, but older skill
+# copies on other hosts still use this rule, so the stale-task close stays.
 SKILL_ACTIVE_TASK_STATUSES = {"running", "blocked"}
 SKILL_ACTIVE_SIDE_STATUSES = {"running", "blocked", "attempt_invalid"}
 

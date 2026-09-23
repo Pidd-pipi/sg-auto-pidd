@@ -17,7 +17,7 @@ from unittest import mock
 APP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP))
 
-from api.common import SettingsStore  # noqa: E402
+from api.common import MonitorError, SettingsStore  # noqa: E402
 from api.service import SchedulerService  # noqa: E402
 from api.version import APP_VERSION  # noqa: E402
 from server import Handler, MonitorInstanceLock, MonitorHTTPServer  # noqa: E402
@@ -302,6 +302,41 @@ class PauseOnStartTests(unittest.TestCase):
         self.assertTrue(config["automation"]["paused"])
         self.assertFalse(service._paused_on_start)
         self.assertFalse((self.root / "config.json").exists())
+
+
+class ManualEnqueueGateTests(unittest.TestCase):
+    """queue-add-platform must refuse projects the skill would refuse at init."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        (self.root / "tasks").mkdir(parents=True, exist_ok=True)
+        self.service = SchedulerService(make_config(self.root))
+        self.addCleanup(self.service.stop)
+
+    def _add(self, code: str):
+        return self.service.automation_action(
+            "queue-add-platform", {"project": {"id": "p-1", "code": code, "name": "项目"}}
+        )
+
+    def test_claimed_project_is_rejected(self):
+        with mock.patch.object(self.service.platform, "occupied_project_codes", return_value={"gb-14-1"}):
+            with self.assertRaises(MonitorError) as raised:
+                self._add("GB-14-1")
+        self.assertIn("仍被占用", str(raised.exception))
+        self.assertEqual(self.service.queue.snapshot()["items"], [])
+
+    def test_free_project_is_queued(self):
+        with mock.patch.object(self.service.platform, "occupied_project_codes", return_value={"gb-15-1"}):
+            self._add("gb-14-1")
+        codes = [item.get("projectCode") for item in self.service.queue.snapshot()["items"]]
+        self.assertEqual(codes, ["gb-14-1"])
+
+    def test_unreadable_claims_block_enqueue(self):
+        with mock.patch.object(self.service.platform, "occupied_project_codes", side_effect=OSError("boom")):
+            with self.assertRaises(MonitorError):
+                self._add("gb-14-1")
 
 
 class LockTests(unittest.TestCase):
