@@ -2190,7 +2190,19 @@ class QueueManager:
             stage = str(result.get("stage") or "")
             result_status = str(result.get("status") or "")
             task_started = bool(task_root and (task_root / "monitor" / "state.json").is_file())
-            desktop_submitted = stage in {"desktop-submitted", "desktop-task-running"} or task_started
+            desktop_submitted_raw = stage in {"desktop-submitted", "desktop-task-running"} or task_started
+            uncertain = task_started or stage in {
+                "desktop-start-timeout",
+                "desktop-submitted",
+                "desktop-task-running",
+                "wait-timeout",
+            }
+            evidence_item = dict(item)
+            evidence_item["resultFile"] = str(result_file) if result_file else str(item.get("resultFile") or "")
+            evidence_item["taskRoot"] = result_root or str(item.get("taskRoot") or "")
+            live_reason = self.live_task_reason(evidence_item) if uncertain else ""
+            desktop_submitted = desktop_submitted_raw and bool(live_reason)
+            uncertain = uncertain and bool(live_reason)
 
             # The executor reports its own platform task when it selected one;
             # that record wins over the monitor's pre-deduction.
@@ -2383,6 +2395,10 @@ class QueueManager:
                 continue
 
             if item.get("status") == "orphaned" or item.get("capacityHeld"):
+                if not uncertain:
+                    # The reconciliation loop owns stale orphan cleanup.  Do not
+                    # revive an old stage-only record after it has been released.
+                    continue
                 item.update({
                     "status": "orphaned",
                     "jobPid": "",
@@ -2421,12 +2437,6 @@ class QueueManager:
                 changed = True
                 continue
 
-            uncertain = task_started or stage in {
-                "desktop-start-timeout",
-                "desktop-submitted",
-                "desktop-task-running",
-                "wait-timeout",
-            }
             if uncertain:
                 self.settle_quota(item, success=False, reason="无法确认桌面任务已停止")
                 item.update({

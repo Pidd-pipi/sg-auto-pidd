@@ -473,6 +473,11 @@ class ReconcileTests(SchedulerTestCase):
         self.assertEqual(item["status"], "skipped")
         self.assertFalse(item["capacityHeld"])
 
+        queue._sync_running_locked()
+
+        self.assertEqual(item["status"], "skipped")
+        self.assertFalse(item["capacityHeld"])
+
     def test_dead_markers_are_swept(self):
         queue = self._queue([])
         marker = queue.slots.reserve(container="sologsb-gb-1-a-1", project_code="gb-1", item_id="platform-1")
