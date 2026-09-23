@@ -5,75 +5,86 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>任务监看 · sologsb 调度台</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260922-log-columns">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("sologsb-theme-v3")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}catch(e){}</script>
+  <link rel="stylesheet" href="/static/app.css?v=0.3.0">
 </head>
 <body>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand">
-      <div class="rail-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-      <div class="rail-brand-text">
-        <p>sologsb</p>
-        <h1>调度台</h1>
-      </div>
-    </div>
-    <nav class="rail-nav">
-      <a href="/" class="active">监看<span class="count" id="navTasks">0</span></a>
-      <a href="/tasks">队列<span class="count" id="navQueue">0</span></a>
-      <a href="/settings">设置</a>
-      <a href="/logs">日志</a>
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-text"><b>调度台</b><small>sologsb</small></span>
+    </a>
+    <nav class="nav">
+      <a href="/" class="active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>监看<span class="count" id="navTasks">0</span></a>
+      <a href="/tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>队列<span class="count" id="navQueue">0</span></a>
+      <a href="/logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>日志</a>
+      <a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg>设置</a>
     </nav>
-    <div class="rail-section">
-      <span class="rail-label">默认文件夹</span>
+    <div class="rail-group">
+      <label class="rail-label" for="folderSelect">默认文件夹</label>
       <select class="input" id="folderSelect"></select>
+      <div class="rail-path" id="folderPath"></div>
       <span class="rail-label">调度模式</span>
       <button class="mode-toggle" id="modeBadge" type="button" data-mode="containers"><span class="dot"></span>容器优先</button>
     </div>
     <div class="rail-foot">
-      <button class="btn ghost sm" id="themeBtn" type="button">切换主题</button>
-      <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
-      <div class="link" id="folderPath"></div>
+      <div class="rail-foot-row">
+        <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
+        <button class="icon-btn" id="themeBtn" type="button" title="切换明暗主题" aria-label="切换明暗主题">
+          <svg class="theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg class="theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+      <div class="app-version" id="appVersion">v—</div>
     </div>
   </aside>
 
   <main class="main">
     <header class="head">
-      <div class="head-title">任务监看<small id="headMeta"></small></div>
-      <div class="head-spacer"></div>
+      <div class="head-main"><h2 class="head-title">任务监看</h2><span class="head-meta" id="headMeta"></span></div>
       <div class="head-tools">
-        <button class="btn" id="refreshBtn" type="button">刷新</button>
+        <button class="btn" id="refreshBtn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>刷新
+        </button>
       </div>
     </header>
 
-    <div class="band" id="band"></div>
+    <div class="page">
+      <div class="band" id="band"></div>
 
-    <div class="filters">
-      <input class="input search" id="searchInput" type="search" placeholder="搜索任务名 / 项目编号 / 任务号" autocomplete="off">
-      <span class="cell" id="scopeHint"></span>
-      <div class="segmented" id="filterRow">
-        <button type="button" data-filter="all" class="active">全部<span class="n" data-count="all">0</span></button>
-        <button type="button" data-filter="running">运行中<span class="n" data-count="running">0</span></button>
-        <button type="button" data-filter="waiting">等待中<span class="n" data-count="waiting">0</span></button>
-        <button type="button" data-filter="attention">需处理<span class="n" data-count="attention">0</span></button>
-        <button type="button" data-filter="finished">已完成<span class="n" data-count="finished">0</span></button>
-        <button type="button" data-filter="failed">失败<span class="n" data-count="failed">0</span></button>
-      </div>
-    </div>
-
-    <div class="list" id="list">
-      <div class="list-head">
-        <span></span>
-        <span>状态</span>
-        <span>任务</span>
-        <span class="hide-sm">项目</span>
-        <span class="hide-sm">阶段</span>
-        <span class="hide-sm">侧 / 候选</span>
-        <span class="num">容器</span>
-        <span class="num">更新</span>
-        <span></span>
-      </div>
-      <div id="rows"></div>
-      <div class="empty" id="emptyState" hidden></div>
+      <section class="table" id="list">
+        <div class="table-sticky">
+          <div class="toolbar">
+            <label class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input class="input" id="searchInput" type="search" placeholder="搜索任务名 / 项目编号 / 任务号" autocomplete="off">
+            </label>
+            <div class="segmented" id="filterRow">
+              <button type="button" data-filter="all" class="active">全部<span class="n" data-count="all">0</span></button>
+              <button type="button" data-filter="running">运行中<span class="n" data-count="running">0</span></button>
+              <button type="button" data-filter="waiting">等待中<span class="n" data-count="waiting">0</span></button>
+              <button type="button" data-filter="attention">需处理<span class="n" data-count="attention">0</span></button>
+              <button type="button" data-filter="finished">已完成<span class="n" data-count="finished">0</span></button>
+              <button type="button" data-filter="failed">失败<span class="n" data-count="failed">0</span></button>
+            </div>
+            <span class="grow"></span>
+            <span class="scope" id="scopeHint"></span>
+          </div>
+          <div class="list-head">
+            <span>状态</span>
+            <span>任务</span>
+            <span class="hide-sm col-project">项目</span>
+            <span class="hide-sm">阶段</span>
+            <span class="hide-sm">候选 / A · B</span>
+            <span class="num hide-sm">容器</span>
+            <span class="num hide-sm">更新</span>
+            <span></span>
+          </div>
+        </div>
+        <div id="rows"></div>
+        <div class="empty" id="emptyState" hidden></div>
+      </section>
     </div>
   </main>
 </div>
@@ -81,15 +92,19 @@
 <div class="scrim" id="scrim" hidden>
 <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal-head">
-    <div class="modal-title" id="modalTitle">—</div>
-    <div class="modal-sub" id="modalSub"></div>
+    <div class="modal-heading">
+      <div class="modal-title" id="modalTitle">—</div>
+      <div class="modal-sub" id="modalSub"></div>
+    </div>
     <div class="modal-tools">
       <button class="btn" id="copyPathBtn" type="button">复制目录</button>
       <button class="btn danger" id="dismissBtn" type="button">放弃监控</button>
-      <button class="btn ghost" id="closeModalBtn" type="button">关闭</button>
+      <button class="icon-btn" id="closeModalBtn" type="button" title="关闭（Esc）" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
     </div>
   </div>
-  <div class="tabs" id="tabs">
+  <div class="tabs" id="tabs" role="tablist">
     <button type="button" data-tab="overview" class="active">概览</button>
     <button type="button" data-tab="logs">运行日志</button>
     <button type="button" data-tab="prompt">提示词</button>
@@ -97,7 +112,7 @@
   <div class="modal-body">
     <div class="pane" id="pane-overview"></div>
     <div class="pane" id="pane-logs" hidden>
-      <div class="filters" style="position:static;padding:0 0 10px;border:0;background:none">
+      <div class="toolbar">
         <div class="segmented" id="logKindRow">
           <button type="button" data-kind="" class="active">全部</button>
           <button type="button" data-kind="tool">工具</button>
@@ -105,41 +120,35 @@
           <button type="button" data-kind="error">错误</button>
           <button type="button" data-kind="thinking">思考</button>
         </div>
-        <span class="cell" id="logMeta"></span>
+        <span class="scope" id="logCount"></span>
+        <span class="grow"></span>
+        <span class="scope" id="logMeta"></span>
         <button class="btn ghost sm" id="logRefreshBtn" type="button">刷新</button>
       </div>
-      <div class="logbox">
-        <div class="logbox-head"><div><strong>候选日志</strong><span id="logCount"></span></div></div>
-        <div class="logstreams" id="logStreams"></div>
-      </div>
+      <div class="logstreams" id="logStreams"></div>
     </div>
     <div class="pane" id="pane-prompt" hidden>
-      <pre class="prose" id="promptText"></pre>
+      <div class="prompt-box"><pre class="prose" id="promptText"></pre></div>
     </div>
   </div>
 </div>
 </div>
 
-<script src="/static/app.js?v=20260922-log-columns"></script>
+<script src="/static/app.js?v=0.3.0"></script>
 <script>
   const { $, $$, esc, debounce, fetchJson, postJson, fmtDuration, fmtAge, fmtClock, toast,
           initTheme, renderRail, renderMetrics, connectStream, renderKeyed, setText, setHtml, setAttr } = window.SoloApp;
 
-  const STATUS_LABELS = {
-    prepared: "已接入", prompt_ready: "提示词就绪", repo_ready: "仓库就绪", running: "执行中",
-    candidates_running: "候选竞速中", candidates_ready: "候选竞速结束", a_staged: "A 已校验",
-    b_staged: "B 已校验", semantic_review_required: "待语义审核", ab_clean: "A/B 已发布",
-    verified: "已验证", gsb_ready: "GSB 就绪", recorded: "已录屏", complete: "已完成",
-    attempt_invalid: "本轮无效", blocked: "已阻断", staged: "已校验", clean: "已发布",
-    invalidated: "已作废", cancelled: "未进前二", idle: "未启动",
-  };
+  const STATUS_LABELS = window.SoloApp.TASK_STATE_LABELS;
   const BUCKET_LABELS = { waiting: "等待中", running: "运行中", attention: "需处理", finished: "已完成", failed: "失败" };
+  const BUCKET_TONES = { waiting: "idle", running: "run", attention: "warn", finished: "ok", failed: "bad" };
   const BADGE_STATE_LABELS = { running: "执行中", done: "已完成", failed: "失败", idle: "未启动", cancelled: "已停止" };
+  const ICON_X = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
 
   const state = {
     data: null, tasks: [], byId: new Map(),
     query: "", filter: "all", selectedId: null, detail: null,
-    tab: "overview", logKind: "", logTimer: null, logSeq: 0, logKeys: "",
+    tab: "overview", logKind: "", logTimer: null, logSeq: 0, logKeys: "", detailTimer: null, detailReload: null,
     connected: false, error: "",
   };
 
@@ -163,6 +172,11 @@
       : `${key} 侧`;
     return `${label} · ${BADGE_STATE_LABELS[badge.state] || badge.state || "未启动"}`;
   }
+  // A candidate chip is coloured by its A/B letter when it has one, otherwise
+  // it is just a numbered candidate.
+  function badgeSide(badge) {
+    return ["A", "B"].includes(String(badge.label)) ? badge.label : (["A", "B"].includes(String(badge.key)) ? badge.key : "");
+  }
   function visibleTasks() {
     const query = state.query.trim().toLowerCase();
     return state.tasks.filter((task) => {
@@ -180,45 +194,46 @@
     let changed = false;
     changed = setAttr(node, "data-bucket", task.bucket) || changed;
     changed = setAttr(node, "data-id", task.id) || changed;
-    node.classList.toggle("selected", task.id === state.selectedId);
     if (node.dataset.built !== "1") {
       node.className = "row";
       node.innerHTML = `
-        <span class="rail-mark-cell"></span>
-        <span class="state" title=""></span>
-        <div class="cell-name">
-          <span class="n"></span>
-          <span class="cell-sub"></span>
-        </div>
-        <div class="cell hide-sm"></div>
-        <div class="cell hide-sm phase"></div>
-        <div class="cell-badges hide-sm"></div>
-        <div class="cell num"></div>
-        <div class="cell time"></div>
-        <button class="row-x" type="button" title="从监看列表移除">✕</button>`;
+        <span data-f="state"><span class="pill dot"></span></span>
+        <div class="cell-name"><span class="n" data-f="name"></span><span class="cell-sub" data-f="sub"></span></div>
+        <div class="cell hide-sm col-project" data-f="project"></div>
+        <div class="cell hide-sm phase" data-f="phase"></div>
+        <div class="cell-badges hide-sm" data-f="badges"></div>
+        <div class="cell num hide-sm" data-f="containers"></div>
+        <div class="cell time hide-sm" data-f="updated"></div>
+        <button class="row-x" type="button" title="从监看列表移除" aria-label="从监看列表移除">${ICON_X}</button>`;
       node.dataset.built = "1";
-      node.addEventListener("click", () => openTask(task.id));
+      node.addEventListener("click", () => openTask(node.dataset.id));
       node.querySelector(".row-x").addEventListener("click", (event) => {
         event.stopPropagation();
-        quickDismiss(task);
+        const current = state.byId.get(node.dataset.id);
+        if (current) quickDismiss(current);
       });
     }
-    const [rail, stateCell, name, sub, project, phase, badges, containers, updated] =
-      $$(".rail-mark-cell, .state, .cell-name .n, .cell-name .cell-sub, .cell, .phase, .cell-badges, .cell.num, .cell.time", node);
+    node.classList.toggle("selected", task.id === state.selectedId);
+    const f = (name) => node.querySelector(`[data-f="${name}"]`);
+    const pill = f("state").firstElementChild;
     const stateLabel = BUCKET_LABELS[task.bucket] || task.bucket || "—";
-    changed = setText(stateCell, stateLabel) || changed;
-    changed = setAttr(stateCell, "data-state", task.bucket) || changed;
-    changed = setAttr(stateCell, "title", `${stateLabel} · ${task.statusLabel || task.status}`) || changed;
-    changed = setText(name, task.name) || changed;
+    changed = setText(pill, stateLabel) || changed;
+    changed = setAttr(pill, "data-tone", BUCKET_TONES[task.bucket] || "idle") || changed;
+    changed = setAttr(pill, "title", `${stateLabel} · ${task.statusLabel || task.status}`) || changed;
+    changed = setText(f("name"), task.name) || changed;
+    changed = setAttr(f("name"), "title", task.name) || changed;
     const bits = [task.projectCode, task.taskType, task.difficulty].filter(Boolean).join(" · ");
-    changed = setText(sub, bits || "—") || changed;
-    changed = setText(project, task.projectName || task.projectCode || "—") || changed;
-    changed = setHtml(phase, `<span>${esc(task.phase || "—")}</span>`) || changed;
-    changed = setHtml(badges, (task.badges || []).map((badge) => (
-      `<span class="tag" data-state="${esc(badge.state)}" data-side="${esc(badge.key)}" title="${esc(badgeTitle(badge))}">${esc(badge.label)}</span>`
+    changed = setText(f("sub"), bits || "—") || changed;
+    changed = setText(f("project"), task.projectName || task.projectCode || "—") || changed;
+    changed = setText(f("phase"), task.phase || "—") || changed;
+    changed = setAttr(f("phase"), "title", task.phase || "") || changed;
+    changed = setHtml(f("badges"), (task.badges || []).map((badge) => (
+      `<span class="tag" data-state="${esc(badge.state)}" data-side="${esc(badgeSide(badge))}" title="${esc(badgeTitle(badge))}">${esc(badge.label)}</span>`
     )).join("")) || changed;
-    changed = setText(containers, String(task.activeContainers || 0)) || changed;
-    changed = setText(updated, fmtClock(task.updatedAt)) || changed;
+    const containers = Number(task.activeContainers || 0);
+    changed = setText(f("containers"), String(containers)) || changed;
+    f("containers").toggleAttribute("data-zero", containers === 0);
+    changed = setText(f("updated"), fmtClock(task.updatedAt)) || changed;
     return changed;
   }
 
@@ -236,19 +251,38 @@
     $$("#filterRow [data-count]").forEach((node) => setText(node, String(counts[node.dataset.count] || 0)));
   }
 
-  /* ----------------------------------------------------------------- drawer */
+  /* ------------------------------------------------------------------ modal */
+  function showTab(tab) {
+    state.tab = tab;
+    $$("#tabs button").forEach((node) => node.classList.toggle("active", node.dataset.tab === tab));
+    $$(".pane").forEach((node) => { node.hidden = node.id !== `pane-${tab}`; });
+  }
+
   function openTask(id) {
     state.selectedId = id;
     persistSelected(id);
     // Opening straight on the log is what the modal is for: it is the view you
     // want the moment you click a task, and the container log is the evidence.
-    state.tab = "logs";
-    $$("#tabs button").forEach((node) => node.classList.toggle("active", node.dataset.tab === "logs"));
-    $$(".pane").forEach((node) => { node.hidden = node.id !== `pane-${state.tab}`; });
+    showTab("logs");
     $("#scrim").hidden = false;
     document.body.style.overflow = "hidden";
     renderRows();
     loadDetail();
+    startDetailRefresh();
+  }
+
+  // The overview (workflow, candidate state, trace counts) used to be read once
+  // when the modal opened and then went stale.  Re-read it while the modal is
+  // open: on a delta for this task, and every 10 s as a floor.
+  function startDetailRefresh() {
+    clearInterval(state.detailTimer);
+    state.detailTimer = setInterval(() => {
+      if (!document.hidden && !$("#scrim").hidden && state.tab === "overview") loadDetail();
+    }, 10000);
+  }
+  function scheduleDetailReload() {
+    clearTimeout(state.detailReload);
+    state.detailReload = setTimeout(() => { if (!$("#scrim").hidden) loadDetail(); }, 600);
   }
 
   function closeTask() {
@@ -259,13 +293,20 @@
     state.logKeys = "";
     persistSelected(null);
     stopLogPolling();
+    clearInterval(state.detailTimer);
+    clearTimeout(state.detailReload);
+    state.detailTimer = null;
     renderRows();
   }
 
   async function loadDetail() {
     if (!state.selectedId) return;
+    const id = state.selectedId;
     try {
-      state.detail = await fetchJson(`/api/tasks/${encodeURIComponent(state.selectedId)}`);
+      const detail = await fetchJson(`/api/tasks/${encodeURIComponent(id)}`);
+      // The modal may have closed or moved to another task while this was in flight.
+      if (state.selectedId !== id || $("#scrim").hidden) return;
+      state.detail = detail;
       renderDetail();
     } catch (error) {
       toast(`读取任务详情失败：${error.message}`, true);
@@ -288,7 +329,9 @@
     const artifactTags = [
       ["语义 A", artifacts.semanticA], ["语义 B", artifacts.semanticB], ["证据", artifacts.evidence],
       ["审计", artifacts.audit], ["GSB", artifacts.gsb],
-    ].map(([label, ok]) => `<span class="pill" data-state="${ok ? "settled" : "pending"}">${esc(label)} ${ok ? "完成" : "未完成"}</span>`).join("");
+    ].map(([label, ok]) => `<span class="pill dot" data-tone="${ok ? "ok" : "idle"}">${esc(label)} ${ok ? "完成" : "未完成"}</span>`).join("");
+    const heads = task.localHead && (task.localHead.A || task.localHead.B)
+      ? `A ${esc((task.localHead.A || "—").slice(0, 8))} · B ${esc((task.localHead.B || "—").slice(0, 8))}` : "";
 
     // A/B are markers on a candidate, so there is exactly one list: the
     // candidates, each carrying its mapped letter.  With two candidates they
@@ -296,47 +339,57 @@
     const units = task.units || [];
     const mapped = units.filter((unit) => unit.mappedSide).length;
     const candidatePanel = units.length
-      ? `<div class="panel" style="margin-top:12px">
+      ? `<div class="panel">
            <div class="panel-head">
              <h3>候选${units.length > 2 ? "竞速" : ""} / A · B</h3>
              <span>${units.length} 个候选${units.length > 2 ? ` · ${mapped}/2 已映射 A/B` : mapped ? ` · ${mapped} 个已标记 A/B` : " · 尚未映射"}</span>
            </div>
-           <div class="panel-body masonry">${units.map((unit) => renderUnit(task, unit)).join("")}</div>
+           <div class="masonry">${units.map((unit) => renderUnit(task, unit)).join("")}</div>
          </div>`
       : "";
 
+    const stepIcon = (step) => (step.state === "done" ? "✓" : step.state === "blocked" ? "!" : step.state === "current" ? "●" : "");
+    const stepLabel = (step) => (step.state === "done" ? "完成" : step.state === "current" ? "进行中" : step.state === "blocked" ? "阻断" : "待办");
     setHtml($("#pane-overview"), `
-      <div class="panel">
-        <div class="panel-head"><h3>工作流</h3><span>${workflow.done}/${workflow.total} · ${workflow.percent}%</span></div>
-        <div class="panel-body steps">${(workflow.steps || []).map((step) => `
-          <div class="step" data-state="${esc(step.state)}">
-            <span class="step-i">${step.state === "done" ? "✓" : step.state === "blocked" ? "!" : "·"}</span>
-            <div><div class="step-l">${esc(step.label)}</div><div class="step-d">${esc(step.detail)}</div></div>
-            <span class="step-s">${esc(step.state === "done" ? "完成" : step.state === "current" ? "进行中" : step.state === "blocked" ? "阻断" : "待办")}</span>
-          </div>`).join("")}</div>
-      </div>
-      <div class="panel" style="margin-top:12px">
-        <div class="panel-head"><h3>产物</h3><span>${task.localHead && (task.localHead.A || task.localHead.B) ? `A=${esc((task.localHead.A || "—").slice(0, 8))} B=${esc((task.localHead.B || "—").slice(0, 8))}` : ""}</span></div>
-        <div class="panel-body row-inline">${artifactTags}</div>
+      <div class="pane-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>工作流</h3>
+            <div class="progress"><span class="muted">${workflow.done}/${workflow.total}</span><div class="meter"><i style="width:${Number(workflow.percent) || 0}%"></i></div></div>
+          </div>
+          <div class="steps">${(workflow.steps || []).map((step) => `
+            <div class="step" data-state="${esc(step.state)}">
+              <span class="step-i">${stepIcon(step)}</span>
+              <div><div class="step-l">${esc(step.label)}</div>${step.detail ? `<div class="step-d">${esc(step.detail)}</div>` : ""}</div>
+              <span class="step-s">${stepLabel(step)}</span>
+            </div>`).join("")}</div>
+        </div>
+        <div class="stack">
+          <div class="panel">
+            <div class="panel-head"><h3>产物</h3><span class="mono">${heads}</span></div>
+            <div class="panel-body row-inline">${artifactTags}</div>
+          </div>
+          <div class="panel">
+            <div class="path-line"><b>任务目录</b><span>${esc(task.taskRoot || "—")}</span></div>
+          </div>
+        </div>
       </div>
       ${candidatePanel}
-      <div class="panel" style="margin-top:12px">
-        <div class="panel-head"><h3>路径</h3><span>${esc(task.taskRoot || "")}</span></div>
-      </div>
     `);
 
     setText($("#promptText"), task.promptText || "未读取到提示词文件。");
 
     renderLogColumns();
-    if (state.tab === "logs") startLogPolling();
+    // A refresh of the detail must not restart (and immediately re-fetch) an
+    // already-running log poll.
+    if (state.tab === "logs" && !state.logTimer) startLogPolling();
   }
 
   function renderUnit(task, unit) {
     const key = unit.key;
     const trace = unit.trace || {};
-    const stateKey = unit.active ? "running"
-      : ["staged", "clean"].includes(unit.status) ? "done"
-      : ["blocked", "attempt_invalid", "invalidated"].includes(unit.status) ? "failed" : "";
+    const tone = unit.active ? "run"
+      : ["staged", "clean"].includes(unit.status) ? "ok"
+      : ["blocked", "attempt_invalid", "invalidated"].includes(unit.status) ? "bad" : "idle";
     const bars = (unit.stages || []).map((stage) => (
       `<div class="bar-cell ${esc(stage.state)}"><div class="bar"></div><span>${esc(stage.label)}</span></div>`
     )).join("");
@@ -348,34 +401,35 @@
       : `<span class="marker none">—</span>`;
     const rank = unit.completionOrder ? `第 ${unit.completionOrder} 名` : "";
     return `
-      <section class="side" data-side="${esc(key)}">
+      <section class="side" data-mapped="${esc(unit.mappedSide || "")}">
         <div class="side-head">
-          <div style="display:flex;gap:8px;align-items:flex-start;min-width:0">
+          <div class="side-id">
             ${marker}
             <div style="min-width:0">
               <div class="side-name">${esc(unit.label)}${rank ? ` <span class="muted">· ${esc(rank)}</span>` : ""}</div>
-              <div class="side-phase">${esc(unit.candidateId || unit.key)} · ${esc(unit.phaseDetail || "等待状态")}</div>
+              <div class="side-phase">${esc(unit.phaseDetail || "等待状态")}</div>
             </div>
           </div>
-          <span class="pill" data-state="${stateKey === "running" ? "claimed" : stateKey === "done" ? "settled" : stateKey === "failed" ? "refunded" : "pending"}">${esc(STATUS_LABELS[unit.status] || unit.status || "未启动")}</span>
+          <span class="pill dot" data-tone="${tone}">${esc(STATUS_LABELS[unit.status] || unit.status || "未启动")}</span>
         </div>
         <div class="side-metrics">
-          <span>尝试 <b>${esc(unit.attempt ?? "—")}</b></span>
-          <span>工具 <b>${esc(trace.toolCalls ?? 0)}</b></span>
-          <span>事件 <b>${esc(trace.eventCount ?? 0)}</b></span>
-          <span>静默 <b>${esc(unit.silentSeconds === null || unit.silentSeconds === undefined ? "—" : fmtDuration(unit.silentSeconds))}</b></span>
+          <span>尝试<b>${esc(unit.attempt ?? "—")}</b></span>
+          <span>工具<b>${esc(trace.toolCalls ?? 0)}</b></span>
+          <span>事件<b>${esc(trace.eventCount ?? 0)}</b></span>
+          <span>静默<b>${esc(unit.silentSeconds === null || unit.silentSeconds === undefined ? "—" : fmtDuration(unit.silentSeconds))}</b></span>
         </div>
-        <div class="bars">${bars}</div>
+        ${bars ? `<div class="bars">${bars}</div>` : ""}
         <dl class="kv">
           <div><dt>容器</dt><dd>${esc(container.name || "无容器")}${container.running ? " · 运行中" : ""}</dd></div>
           <div><dt>Session</dt><dd>${esc(unit.sessionId || "—")}</dd></div>
-          <div><dt>最近输出</dt><dd>${esc(trace.lastSummary || trace.lastError || "—")}</dd></div>
           <div><dt>启动于</dt><dd>${esc(fmtClock(unit.startedAt))}</dd></div>
+          <div><dt>候选 ID</dt><dd>${esc(unit.candidateId || unit.key)}</dd></div>
+          <div style="grid-column:1/-1"><dt>最近输出</dt><dd>${esc(trace.lastSummary || trace.lastError || "—")}</dd></div>
         </dl>
-        <div class="row-inline" style="margin-top:10px">
+        <div class="row-inline">
           <button class="btn sm" data-unit-log="${esc(key)}">查看日志</button>
           <button class="btn sm" data-resume="${esc(key)}" ${unit.active ? "disabled" : ""}>续跑</button>
-          <button class="btn sm" data-rerun="${esc(key)}" ${unit.active ? "disabled" : ""}>重跑</button>
+          <button class="btn sm ghost" data-rerun="${esc(key)}" ${unit.active ? "disabled" : ""}>重跑</button>
         </div>
       </section>`;
   }
@@ -505,7 +559,7 @@
         stream.scrollTop = viewport && !viewport.atBottom ? viewport.scrollTop : stream.scrollHeight;
         const countsForUnit = {};
         for (const event of all) countsForUnit[event.kind] = (countsForUnit[event.kind] || 0) + 1;
-        setText(counts.get(result.key), `${events.length}/${all.length} 条 · 工具 ${countsForUnit.tool || 0} · 输出 ${countsForUnit.assistant || 0} · 错误 ${(countsForUnit.error || 0) + (countsForUnit.warning || 0)}`);
+        setText(counts.get(result.key), `${events.length}/${all.length} 条 · 工具 ${countsForUnit.tool || 0} · 错误 ${(countsForUnit.error || 0) + (countsForUnit.warning || 0)}`);
         const path = result.data.path || "未找到轨迹文件";
         const pathNode = paths.get(result.key);
         if (pathNode) {
@@ -519,7 +573,7 @@
         totals.error += (countsForUnit.error || 0) + (countsForUnit.warning || 0);
       }
       setText($("#logCount"), `共 ${totals.shown}/${totals.all} 条 · 工具 ${totals.tool} · 输出 ${totals.assistant} · 错误 ${totals.error}`);
-      setText($("#logMeta"), `${units.length} 个候选 · 并列同步`);
+      setText($("#logMeta"), `${units.length} 个候选并列 · 每 3 秒同步`);
     } catch (error) {
       if (seq === state.logSeq) setText($("#logMeta"), `事件读取失败：${error.message}`);
     }
@@ -595,17 +649,23 @@
     return merged;
   }
 
+  function renderScope(payload) {
+    const folder = (payload.folders || []).find((item) => item.id === payload.selectedFolderId);
+    const scope = folder
+      ? `<b>${esc(folder.name)}</b> · ${esc(payload.selectedFolderPath || "—")}`
+      : `<b>全部 roots</b> · ${esc((payload.activeRoots || []).join(" · ") || "未设置")}`;
+    setHtml($("#scopeHint"), `扫描范围 ${scope}`);
+    setAttr($("#scopeHint"), "title", $("#scopeHint").textContent);
+  }
+
   function applySnapshot(payload) {
     state.data = payload;
     state.tasks = mergeTaskCards(payload.tasks || []);
     state.byId = new Map(state.tasks.map((task) => [task.id, task]));
     renderRail({ ...payload, connected: state.connected, error: state.error });
     renderMetrics(payload);
-    setText($("#headMeta"), `${state.tasks.length} 个任务 · ${fmtClock(payload.generatedAt)}`);
-    const folder = (payload.folders || []).find((item) => item.id === payload.selectedFolderId);
-    setText($("#scopeHint"), folder
-      ? `范围：${folder.name} → ${payload.selectedFolderPath || "—"}`
-      : `范围：${(payload.activeRoots || []).join(" · ") || "未设置"}`);
+    setText($("#headMeta"), `${state.tasks.length} 个任务 · 快照 ${fmtClock(payload.generatedAt)}`);
+    renderScope(payload);
     if (!state.selectedId) state.selectedId = selectedIdFromUrl();
     if (state.selectedId && !state.byId.has(state.selectedId)) {
       state.selectedId = state.tasks.find((task) => task.needsAttention)?.id || state.tasks[0]?.id || null;
@@ -626,8 +686,9 @@
     state.data.generatedAt = payload.generatedAt;
     renderRail({ ...state.data, connected: state.connected, error: state.error });
     renderMetrics(state.data);
-    setText($("#headMeta"), `${state.tasks.length} 个任务 · ${fmtClock(payload.generatedAt)}`);
+    setText($("#headMeta"), `${state.tasks.length} 个任务 · 快照 ${fmtClock(payload.generatedAt)}`);
     renderRows();
+    if (state.selectedId && changed.has(state.selectedId) && !$("#scrim").hidden) scheduleDetailReload();
   }
 
   /* ------------------------------------------------------------------- wire */
@@ -644,7 +705,10 @@
     renderRows();
   });
 
-  $("#refreshBtn").addEventListener("click", async () => applySnapshot(await fetchJson("/api/snapshot")));
+  $("#refreshBtn").addEventListener("click", async () => {
+    try { applySnapshot(await fetchJson("/api/snapshot")); }
+    catch (error) { toast(`刷新失败：${error.message}`, true); }
+  });
   $("#modeBadge").addEventListener("click", switchMode);
   $("#folderSelect").addEventListener("change", saveFolder);
   $("#closeModalBtn").addEventListener("click", closeTask);
@@ -666,9 +730,7 @@
     if (!jump || !state.detail) return;
     const unit = (state.detail.units || []).find((item) => item.key === jump.dataset.unitLog);
     if (!unit) return;
-    state.tab = "logs";
-    $$("#tabs button").forEach((node) => node.classList.toggle("active", node.dataset.tab === "logs"));
-    $$(".pane").forEach((node) => { node.hidden = node.id !== "pane-logs"; });
+    showTab("logs");
     startLogPolling();
     requestAnimationFrame(() => focusLogCandidate(unit.key));
   });
@@ -698,19 +760,25 @@
   $("#tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-tab]");
     if (!button) return;
-    state.tab = button.dataset.tab;
-    $$("#tabs button").forEach((node) => node.classList.toggle("active", node === button));
-    $$(".pane").forEach((node) => { node.hidden = node.id !== `pane-${state.tab}`; });
-    if (state.tab === "logs") startLogPolling(); else stopLogPolling();
+    showTab(button.dataset.tab);
+    if (state.tab === "logs") startLogPolling();
+    else {
+      stopLogPolling();
+      if (state.tab === "overview") loadDetail();
+    }
   });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !$("#scrim").hidden) closeTask();
+    if (event.key === "/" && document.activeElement === document.body && $("#scrim").hidden) {
+      event.preventDefault();
+      $("#searchInput").focus();
+    }
   });
 
   window.SoloApp.onVisibilityChange((visible) => {
     if (!visible) stopLogPolling();
-    else if (state.tab === "logs" && state.selectedId) startLogPolling();
+    else if (state.tab === "logs" && state.selectedId && !$("#scrim").hidden) startLogPolling();
   });
 
   connectStream({

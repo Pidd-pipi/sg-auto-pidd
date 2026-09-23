@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,11 +55,24 @@ def redact_log_text(value: Any, limit: int = 4000) -> str:
     return text
 
 
+def _stdout_is(path: Path) -> bool:
+    """Whether stdout is already redirected into ``path``."""
+    try:
+        out = os.fstat(sys.stdout.fileno())
+        target = path.stat()
+    except (OSError, ValueError, AttributeError):
+        return False
+    return (out.st_dev, out.st_ino) == (target.st_dev, target.st_ino)
+
+
 class LogWriter:
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("", encoding="utf-8")
+        # The monitor redirects the worker's stdout into this same file; echoing
+        # there as well wrote every line twice.
+        self._echo = not _stdout_is(self.path)
 
     def emit(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -65,7 +80,8 @@ class LogWriter:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
-        print(line, end="", flush=True)
+        if self._echo:
+            print(line, end="", flush=True)
 
 
 def _event_time(event: dict[str, Any]) -> str:

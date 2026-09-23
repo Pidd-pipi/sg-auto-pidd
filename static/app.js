@@ -3,6 +3,14 @@
 (function () {
   "use strict";
 
+  const assetVersion = (() => {
+    try {
+      const source = document.currentScript && document.currentScript.src;
+      return new URL(source || "", document.baseURI).searchParams.get("v") || "";
+    } catch (error) {
+      return "";
+    }
+  })();
   const $ = (selector, root) => (root || document).querySelector(selector);
   const $$ = (selector, root) => Array.from((root || document).querySelectorAll(selector));
 
@@ -114,7 +122,8 @@
   /* ------------------------------------------------------------------ theme */
   function initTheme() {
     const saved = localStorage.getItem("sologsb-theme-v3");
-    document.documentElement.dataset.theme = saved || "dark";
+    const system = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = saved || system;
     const button = $("#themeBtn");
     if (button) {
       button.addEventListener("click", () => {
@@ -182,38 +191,50 @@
     // "运行中任务" is the task tree's count, not the queue's: a task started by
     // an earlier scheduler instance, or by the skill directly, is in no queue at
     // all and the queue number silently read zero while tasks were running.
+    // The card shows real containers against the limit.  Candidates queued in
+    // the skill's limiter are listed separately: adding them to the headline
+    // read as "5 / 4" — over the limit — when the limit was exactly met.
+    // Excluded (test) projects run outside the limit; only the counted ones go
+    // against it, otherwise the card read "6 / 4" with the limit exactly met.
+    const running = Number(containers.counted ?? containers.running ?? 0);
+    const excluded = Number(containers.excluded ?? 0);
+    const limit = Number(containers.hardLimit ?? 0);
+    const queued = Number(containers.reserved ?? 0);
+    const phantom = (containers.phantom || []).length;
     const cells = [
       {
-        k: "运行中任务", v: summary.active || 0,
+        k: "运行中任务", v: summary.active || 0, tone: "run",
         s: `并发上限 ${queue.maxTasks || queue.capacity || 0} · 队列占用 ${counts.running || 0}`,
-        tone: "",
       },
       {
-        k: "任务容器", v: containers.used ?? 0,
-        s: `硬上限 ${containers.hardLimit ?? 0} · 运行 ${containers.running ?? 0} · 占槽 ${containers.reserved ?? 0}`,
-        tone: containers.hardLimit && containers.used >= containers.hardLimit ? "warn" : "",
+        k: "运行容器", v: running, unit: limit ? `/ ${limit}` : "", tone: "run",
+        s: [
+          queued ? `排队候选 ${queued}` : (limit && running >= limit ? "已满" : `空位 ${Math.max(0, limit - running)}`),
+          excluded ? `免计 ${excluded}` : "",
+          phantom ? `忽略失联 ${phantom}` : "",
+        ].filter(Boolean).join(" · "),
+        meter: limit ? Math.min(100, Math.round((running / limit) * 100)) : null,
       },
       {
-        k: "待执行", v: counts.pending || 0,
+        k: "待执行", v: counts.pending || 0, tone: "",
         s: `已预扣配额 ${counts.quotaClaimed || 0} · 已回补 ${counts.quotaRefunded || 0}`,
-        tone: "",
       },
       {
-        k: "任务需处理", v: summary.attention || 0,
+        k: "需处理", v: summary.attention || 0, tone: "warn",
         s: `任务失败 ${summary.failed || 0}`,
-        tone: summary.attention ? "bad" : "",
+        alert: summary.attention ? "warn" : "",
       },
       {
-        k: "任务已完成", v: summary.finished || 0,
+        k: "已完成", v: summary.finished || 0, tone: "ok",
         s: `共 ${summary.tasks || 0} 个任务 · 队列完成 ${counts.done || 0}`,
-        tone: "ok",
       },
     ];
     setHtml(band, cells.map((cell) => `
-      <div class="band-cell" data-tone="${esc(cell.tone)}">
-        <div class="k">${esc(cell.k)}</div>
-        <div class="v"><b>${esc(cell.v)}</b></div>
-        <div class="sub">${esc(cell.s)}</div>
+      <div class="kpi" data-tone="${esc(cell.tone)}" data-alert="${esc(cell.alert || "")}">
+        <div class="kpi-k">${esc(cell.k)}</div>
+        <div class="kpi-v"><b>${esc(cell.v)}</b>${cell.unit ? `<span>${esc(cell.unit)}</span>` : ""}</div>
+        ${cell.meter === null || cell.meter === undefined ? "" : `<div class="meter"><i style="width:${cell.meter}%"></i></div>`}
+        <div class="kpi-s" title="${esc(cell.s)}">${esc(cell.s)}</div>
       </div>`).join(""));
   }
 
@@ -224,6 +245,7 @@
     let closed = false;
     let backoff = 1000;
     let lastSeq = 0;
+    let dropped = false;
 
     async function open() {
       if (closed) return;
@@ -236,6 +258,9 @@
         if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
         backoff = 1000;
         if (onStatus) onStatus({ connected: true, error: "" });
+        // Back after an outage — usually a restart, possibly onto new code.
+        if (dropped) reloadIfServerChanged();
+        dropped = false;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -272,6 +297,7 @@
         throw new Error("连接关闭");
       } catch (error) {
         if (closed) return;
+        dropped = true;
         if (onStatus) onStatus({ connected: false, error: String(error.message || error) });
         retryTimer = setTimeout(open, backoff);
         backoff = Math.min(backoff * 2, 15000);
@@ -344,15 +370,89 @@
     return false;
   }
 
+  /* --------------------------------------------------------------- version */
+  /* A dashboard left open overnight keeps the JS/CSS it loaded.  When the
+     server comes back reporting a different version than this page's assets,
+     reload once (guarded per version so a server still running the old code
+     cannot cause a reload loop). */
+  function reloadIfServerChanged() {
+    if (!/^\d+\.\d+\.\d+/.test(assetVersion)) return;
+    fetchJson("/api/version", {}, 5000).then((info) => {
+      const version = String(info.version || "");
+      if (!version || version === assetVersion) return;
+      const key = "sologsb-reloaded-for";
+      let last = "";
+      try { last = sessionStorage.getItem(key) || ""; } catch (error) { last = ""; }
+      if (last === version) return;
+      try { sessionStorage.setItem(key, version); } catch (error) { return; }
+      location.reload();
+    }).catch(() => {});
+  }
+
+  function initVersion() {
+    const foot = $(".rail-foot");
+    let node = $("#appVersion");
+    if (!node && !foot) return;
+    if (!node) {
+      node = document.createElement("div");
+      node.id = "appVersion";
+      node.className = "app-version";
+      foot.appendChild(node);
+    }
+    node.textContent = "v—";
+    node.title = "正在读取版本信息";
+    fetchJson("/api/version", {}, 5000).then((info) => {
+      const version = String(info.version || "未知");
+      const commit = String(info.gitCommit || "").slice(0, 7);
+      const branch = String(info.gitBranch || "");
+      const stale = /^\d+\.\d+\.\d+/.test(assetVersion) && assetVersion !== version;
+      node.textContent = `v${version}${commit ? ` · ${commit}` : ""}${stale ? " · 待重启" : ""}`;
+      node.title = [
+        `sologsb 调度台 ${version}`,
+        branch ? `分支 ${branch}` : "",
+        commit ? `提交 ${commit}` : "",
+        stale ? `页面资源为 v${assetVersion}，服务进程仍是 v${version}：重启服务后生效` : "",
+      ].filter(Boolean).join("\n");
+      node.classList.toggle("stale", stale);
+      node.dataset.version = version;
+    }).catch((error) => {
+      if (/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(assetVersion)) {
+        node.textContent = `v${assetVersion}`;
+        node.title = `sologsb 调度台 ${assetVersion}\n版本接口暂不可用，显示静态资源版本`;
+        node.dataset.version = assetVersion;
+        return;
+      }
+      node.textContent = "版本不可用";
+      node.title = String(error.message || error);
+    });
+  }
+
   /* ------------------------------------------------------------ visibility */
   function onVisibilityChange(handler) {
     document.addEventListener("visibilitychange", () => handler(!document.hidden));
   }
 
+  // Labels for the skill's task / side statuses (state.json), shared by the
+  // monitor page and the queue page so the two never disagree.
+  const TASK_STATE_LABELS = {
+    prepared: "已接入", prompt_ready: "提示词就绪", repo_ready: "仓库就绪", running: "执行中",
+    candidates_running: "候选竞速中", candidates_ready: "候选竞速结束", a_staged: "A 已校验",
+    b_staged: "B 已校验", semantic_review_required: "待语义审核", ab_clean: "A/B 已发布",
+    verified: "已验证", gsb_ready: "GSB 就绪", recorded: "已录屏", complete: "已完成",
+    attempt_invalid: "本轮无效", blocked: "已阻断", failed: "已失败", error: "出错", staged: "已校验",
+    clean: "已发布", invalidated: "已作废", cancelled: "未进前二", idle: "未启动",
+  };
+
   window.SoloApp = {
-    $, $$, esc, debounce, fetchJson, postJson,
+    $, $$, esc, debounce, fetchJson, postJson, TASK_STATE_LABELS,
     fmtDuration, fmtAge, fmtClock, fmtTime,
     toast, initTheme, renderRail, renderMetrics, connectStream,
-    renderKeyed, setText, setHtml, setAttr, onVisibilityChange,
+    renderKeyed, setText, setHtml, setAttr, onVisibilityChange, initVersion,
   };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initVersion, { once: true });
+  } else {
+    initVersion();
+  }
 })();

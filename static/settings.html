@@ -5,122 +5,105 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>设置 · sologsb 调度台</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260922-log-columns">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("sologsb-theme-v3")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}catch(e){}</script>
+  <link rel="stylesheet" href="/static/app.css?v=0.3.0">
 </head>
 <body>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand">
-      <div class="rail-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-      <div class="rail-brand-text">
-        <p>sologsb</p>
-        <h1>调度台</h1>
-      </div>
-    </div>
-    <nav class="rail-nav">
-      <a href="/">监看<span class="count" id="navTasks">0</span></a>
-      <a href="/tasks">队列<span class="count" id="navQueue">0</span></a>
-      <a href="/settings" class="active">设置</a>
-      <a href="/logs">日志</a>
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-text"><b>调度台</b><small>sologsb</small></span>
+    </a>
+    <nav class="nav">
+      <a href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>监看<span class="count" id="navTasks">0</span></a>
+      <a href="/tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>队列<span class="count" id="navQueue">0</span></a>
+      <a href="/logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>日志</a>
+      <a href="/settings" class="active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg>设置</a>
     </nav>
-    <div class="rail-section">
-      <span class="rail-label">默认文件夹</span>
+    <div class="rail-group">
+      <label class="rail-label" for="folderSelect">默认文件夹</label>
       <select class="input" id="folderSelect"></select>
+      <div class="rail-path" id="folderPath"></div>
       <span class="rail-label">调度模式</span>
       <button class="mode-toggle" id="modeBadge" type="button" data-mode="containers"><span class="dot"></span>容器优先</button>
     </div>
     <div class="rail-foot">
-      <button class="btn ghost sm" id="themeBtn" type="button">切换主题</button>
-      <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
-      <div class="link" id="folderPath"></div>
+      <div class="rail-foot-row">
+        <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
+        <button class="icon-btn" id="themeBtn" type="button" title="切换明暗主题" aria-label="切换明暗主题">
+          <svg class="theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg class="theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+      <div class="app-version" id="appVersion">v—</div>
     </div>
   </aside>
 
   <main class="main">
     <header class="head">
-      <div class="head-title">设置<small id="headMeta"></small></div>
+      <div class="head-main"><h2 class="head-title">设置</h2><span class="head-meta" id="headMeta"></span></div>
     </header>
 
-    <div class="band" id="band"></div>
-
-    <div style="padding:16px 20px 40px">
+    <div class="page">
       <div class="cols">
-        <section>
+        <section class="stack">
           <div class="panel">
             <div class="panel-head"><h3>Solo Manager</h3><span id="connectionMeta">未测试</span></div>
-            <div class="panel-body grid" style="gap:10px">
-              <div class="field"><label>managerBaseUrl</label><input class="input" id="baseUrlInput" placeholder="http://192.168.31.26:8080"></div>
-              <div class="field"><label>username</label><input class="input" id="usernameInput" placeholder="admin"></div>
+            <div class="panel-body grid">
+              <div class="field"><label for="baseUrlInput">服务地址</label><input class="input mono" id="baseUrlInput" placeholder="http://192.168.31.26:8080"></div>
+              <div class="field"><label for="usernameInput">用户名</label><input class="input" id="usernameInput" placeholder="admin" autocomplete="username"></div>
               <div class="field">
-                <label>password</label>
+                <label for="passwordInput">密码</label>
                 <input class="input" id="passwordInput" type="password" placeholder="留空表示不修改" autocomplete="new-password">
                 <span class="hint" id="passwordHint">密码只写入 macOS Keychain，不落盘到任何配置文件。</span>
               </div>
-              <div class="row-inline">
-                <button class="btn primary" id="saveManagerBtn" type="button">保存并测试连接</button>
-                <button class="btn" id="testConnectionBtn" type="button">仅测试</button>
-              </div>
               <div class="note" id="connectionNotice" hidden></div>
+            </div>
+            <div class="panel-foot">
+              <button class="btn primary" id="saveManagerBtn" type="button">保存并测试连接</button>
+              <button class="btn" id="testConnectionBtn" type="button">仅测试</button>
             </div>
           </div>
 
           <div class="panel">
             <div class="panel-head"><h3>默认文件夹</h3><span id="folderMeta"></span></div>
-            <div class="panel-body">
-              <p class="hint" style="margin-bottom:10px">
+            <div class="panel-body" style="padding-bottom:12px">
+              <p class="hint">
                 从 ChatGPT 应用侧栏的前 10 个文件夹中选择。新队列任务的深链接会带上该文件夹的 projectId，
                 会话因此落在选中文件夹下；工作目录取该文件夹的第一个 root。
               </p>
-              <div class="items" id="folderList" style="border:1px solid var(--line);border-radius:var(--r)"></div>
-              <div class="row-inline" style="margin-top:10px">
-                <button class="btn primary" id="saveFolderBtn" type="button">保存默认文件夹</button>
-                <button class="btn" id="reloadFoldersBtn" type="button">重新读取</button>
-              </div>
+            </div>
+            <div class="items" id="folderList" style="border-top:1px solid var(--line)"></div>
+            <div class="panel-foot">
+              <button class="btn primary" id="saveFolderBtn" type="button">保存默认文件夹</button>
+              <button class="btn" id="reloadFoldersBtn" type="button">重新读取</button>
             </div>
           </div>
         </section>
 
-        <section>
+        <section class="stack">
           <div class="panel">
             <div class="panel-head"><h3>调度模式与上限</h3><span id="modeMeta"></span></div>
-            <div class="panel-body grid grid-2">
-              <div class="field">
-                <label>模式</label>
-                <select class="input" id="modeSelect">
-                  <option value="containers">容器优先</option>
-                  <option value="tasks">任务数量优先</option>
-                </select>
-                <span class="hint">容器优先保持运行中的候选容器数等于设定值；任务数量优先保持并行任务数等于设定值。</span>
-              </div>
-              <div class="field"><label>最大任务数 maxTasks</label><input class="input" id="maxTasksInput" type="number" min="1" max="20"></div>
-              <div class="field"><label>最大容器数 maxContainers</label><input class="input" id="maxContainersInput" type="number" min="1" max="20"></div>
-              <div class="field"><label>单任务备选容器 candidatesPerTask</label><input class="input" id="candidatesInput" type="number" min="1" max="8"></div>
-              <div class="field"><label>补位阈值 containerRefillBelow</label><input class="input" id="refillInput" type="number" min="1" max="20"></div>
-              <div class="field"><label>启动超时 startupTimeout（秒）</label><input class="input" id="startupTimeoutInput" type="number" min="300" max="600" step="30"></div>
-              <div class="field"><label>容器预占位 containerReserve（秒）</label><input class="input" id="reserveInput" type="number" min="300" max="600" step="30"></div>
-              <div class="field"><label>纠错周期 reconcile（秒）</label><input class="input" id="reconcileInput" type="number" min="15" max="3600" step="15"></div>
-            </div>
-            <div class="panel-body" style="border-top:1px solid var(--line)">
-              <button class="btn primary" id="saveLimitsBtn" type="button">保存</button>
-            </div>
+            <div class="panel-body"><dl class="kv" id="limitsKv"></dl></div>
+            <div class="panel-foot"><span class="hint">调度模式与上限只在 <a href="/tasks">队列管理</a> 页设置一处，这里只读展示。</span></div>
           </div>
 
           <div class="panel">
             <div class="panel-head"><h3>生效范围</h3><span id="scopeMeta"></span></div>
-            <div class="panel-body">
-              <dl class="kv" id="scopeKv"></dl>
-              <p class="hint" style="margin-top:10px">扫描范围与队列工作目录都跟随左侧「默认文件夹」；未选择文件夹时使用 config.json 里的全部 roots。</p>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head"><h3>已禁用项目</h3><span id="disabledMeta"></span></div>
-            <div class="items" id="disabledList"></div>
+            <div class="panel-body"><dl class="kv" id="scopeKv" style="grid-template-columns:1fr 1fr"></dl></div>
+            <div class="panel-foot"><span class="hint">扫描范围与队列工作目录都跟随「默认文件夹」；未选择文件夹时使用 config.json 里的全部 roots。</span></div>
           </div>
 
           <div class="panel">
             <div class="panel-head"><h3>运行状态</h3><span id="healthMeta"></span></div>
             <div class="panel-body"><dl class="kv" id="healthKv"></dl></div>
+            <div class="items" id="loopList" style="border-top:1px solid var(--line)"></div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h3>已禁用项目</h3><span id="disabledMeta"></span></div>
+            <div class="items" id="disabledList"></div>
           </div>
         </section>
       </div>
@@ -128,7 +111,7 @@
   </main>
 </div>
 
-<script src="/static/app.js?v=20260922-log-columns"></script>
+<script src="/static/app.js?v=0.3.0"></script>
 <script>
   const { $, $$, esc, fetchJson, postJson, fmtClock, fmtDuration, toast,
           initTheme, renderRail, renderMetrics, connectStream, setText, setHtml } = window.SoloApp;
@@ -136,20 +119,24 @@
   const state = { snapshot: null, folders: [], selectedFolder: "", connected: false, error: "" };
   initTheme();
 
+  const kvHtml = (rows) => rows.map(([label, value]) => (
+    `<div><dt>${esc(label)}</dt><dd>${esc(value ?? "—")}</dd></div>`
+  )).join("");
+
   /* ---------------------------------------------------------------- folders */
   function renderFolders() {
     const selected = state.selectedFolder;
     setHtml($("#folderList"), state.folders.map((folder) => `
-      <label class="item" style="cursor:pointer${folder.id === selected ? ";background:var(--surface-2)" : ""}">
-        <div class="item-top">
-          <div style="min-width:0">
-            <div class="item-name">${esc(folder.position + 1)}. ${esc(folder.name)}</div>
-            <div class="item-sub">${esc((folder.roots || []).join(" · ") || "无 root")}</div>
-          </div>
-          <input type="radio" name="folder" value="${esc(folder.id)}" ${folder.id === selected ? "checked" : ""}>
+      <label class="item pickable${folder.id === selected ? " selected" : ""}">
+        <input type="radio" name="folder" value="${esc(folder.id)}" ${folder.id === selected ? "checked" : ""} style="position:absolute;opacity:0;pointer-events:none">
+        <span class="pick-dot"></span>
+        <div class="item-main" style="flex:1 1 auto">
+          <div class="item-name"><span class="t">${esc(folder.name)}</span><code>#${esc(folder.position + 1)}</code></div>
+          <div class="item-sub mono">${esc((folder.roots || []).join(" · ") || "无 root")}</div>
         </div>
       </label>`).join("") || `<div class="empty">读取不到 ChatGPT 文件夹列表。</div>`);
-    setText($("#folderMeta"), `${state.folders.length} 个文件夹 · 当前 ${selected || "未选择"}`);
+    const current = state.folders.find((item) => item.id === selected);
+    setText($("#folderMeta"), `${state.folders.length} 个文件夹 · 当前 ${current ? current.name : "未选择"}`);
     const select = $("#folderSelect");
     select.innerHTML = `<option value="">未选择</option>` + state.folders.map((folder) => (
       `<option value="${esc(folder.id)}">${esc(folder.name)}</option>`
@@ -157,8 +144,7 @@
     select.value = selected;
     select.dataset.loaded = "1";
     const path = $("#folderPath");
-    const picked = state.folders.find((item) => item.id === selected);
-    if (path) path.textContent = picked ? (picked.roots || []).join(" · ") || "无 root" : "";
+    if (path) path.textContent = current ? (current.roots || []).join(" · ") || "无 root" : "";
   }
 
   async function loadFolders() {
@@ -173,22 +159,30 @@
     }
   }
 
+  // Picking a radio only highlights it; saving is still an explicit action.
+  $("#folderList").addEventListener("change", (event) => {
+    if (event.target.name !== "folder") return;
+    $$("#folderList .pickable").forEach((node) => node.classList.toggle("selected", node.contains(event.target)));
+  });
+
   /* --------------------------------------------------------------- settings */
   async function loadSettings() {
-    const data = await fetchJson("/api/settings");
-    const settings = data.settings || {};
-    const manager = settings.manager || {};
-    $("#baseUrlInput").value = data.platform.managerBaseUrl || manager.baseUrl || "";
-    $("#usernameInput").value = data.platform.username || manager.username || "admin";
-    $("#passwordInput").value = "";
-    setText($("#passwordHint"), manager.passwordSaved
-      ? "Keychain 中已保存密码；留空表示不修改。"
-      : "Keychain 中尚未保存密码；留空表示不修改。");
-    const connection = data.connection || {};
-    setText($("#connectionMeta"), connection.ok ? `已连接 ${connection.baseUrl}` : "未连接");
-    showConnection(connection);
-    if (!state.selectedFolder) state.selectedFolder = settings.defaultFolderId || "";
-    renderFolders();
+    try {
+      const data = await fetchJson("/api/settings");
+      const settings = data.settings || {};
+      const manager = settings.manager || {};
+      $("#baseUrlInput").value = data.platform.managerBaseUrl || manager.baseUrl || "";
+      $("#usernameInput").value = data.platform.username || manager.username || "admin";
+      $("#passwordInput").value = "";
+      setText($("#passwordHint"), manager.passwordSaved
+        ? "Keychain 中已保存密码；留空表示不修改。"
+        : "Keychain 中尚未保存密码；留空表示不修改。");
+      showConnection(data.connection || {});
+      if (!state.selectedFolder) state.selectedFolder = settings.defaultFolderId || "";
+      renderFolders();
+    } catch (error) {
+      toast(`读取设置失败：${error.message}`, true);
+    }
   }
 
   function showConnection(connection) {
@@ -198,6 +192,7 @@
     setText(notice, connection.ok
       ? `连接正常：${connection.baseUrl}${connection.warning ? `（${connection.warning}）` : ""}`
       : `连接失败：${connection.error || "未知原因"}`);
+    setText($("#connectionMeta"), connection.ok ? "已连接" : "未连接");
   }
 
   $("#saveManagerBtn").addEventListener("click", async () => {
@@ -209,7 +204,6 @@
       }, 30000);
       $("#passwordInput").value = "";
       showConnection(result.connection || {});
-      setText($("#connectionMeta"), (result.connection || {}).ok ? `已连接 ${(result.connection || {}).baseUrl}` : "未连接");
       setText($("#passwordHint"), result.passwordSaved ? "Keychain 中已保存密码；留空表示不修改。" : "密码未改动。");
       toast(result.passwordSaved ? "Solo Manager 设置已保存（密码已写入 Keychain）" : "Solo Manager 设置已保存");
       await loadFolders();
@@ -243,7 +237,7 @@
   $("#reloadFoldersBtn").addEventListener("click", loadFolders);
   $("#folderSelect").addEventListener("change", async (event) => {
     try {
-      const result = await postJson("/api/settings", { settings: { defaultFolderId: event.target.value } });
+      await postJson("/api/settings", { settings: { defaultFolderId: event.target.value } });
       state.selectedFolder = event.target.value;
       renderFolders();
       toast("默认文件夹已更新");
@@ -256,20 +250,20 @@
   /* ----------------------------------------------------------------- config */
   function syncForm() {
     const queue = (state.snapshot || {}).queue || {};
-    const set = (id, value) => { const node = $(id); if (node && document.activeElement !== node) node.value = String(value ?? ""); };
-    set("#maxTasksInput", queue.maxTasks);
-    set("#maxContainersInput", queue.maxContainers);
-    set("#candidatesInput", queue.candidatesPerTask);
-    set("#refillInput", queue.containerRefillBelow);
-    set("#startupTimeoutInput", queue.startupTimeoutSeconds);
-    set("#reserveInput", queue.containerReserveSeconds);
-    set("#reconcileInput", queue.reconcileSeconds);
-    const mode = $("#modeSelect");
-    if (mode && document.activeElement !== mode) mode.value = queue.scheduleMode || "containers";
+    const skill = queue.skillLimit || {};
+    setHtml($("#limitsKv"), kvHtml([
+      ["调度模式", queue.scheduleMode === "tasks" ? "任务数量优先" : "容器优先"],
+      ["最大容器数", queue.maxContainers],
+      ["单任务候选数", queue.candidatesPerTask],
+      ["最大任务数", queue.maxTasks],
+      ["启动间隔", `${queue.cooldownSeconds || 0} 秒`],
+      ["启动时暂停队列", queue.pauseOnStart === false ? "关闭（沿用上次状态）" : "开启（每次服务启动后需手动「启动队列」）"],
+      ["技能执行器", skill.inSync ? `已同步 · 上限 ${skill.maxContainers}` : "未同步"],
+    ]));
     setText($("#modeMeta"), queue.scheduleMode === "containers"
-      ? `容器优先 · 硬上限 ${queue.maxContainers} · 补位阈值 ${queue.containerRefillBelow}`
-      : `任务数量优先 · 并发上限 ${queue.maxTasks}`);
-    setText($("#headMeta"), state.snapshot.generatedAt ? fmtClock(state.snapshot.generatedAt) : "");
+      ? `容器优先 · 上限 ${queue.maxContainers}`
+      : `任务数量优先 · 并发 ${queue.maxTasks}`);
+    setText($("#headMeta"), state.snapshot.generatedAt ? `快照 ${fmtClock(state.snapshot.generatedAt)}` : "");
   }
 
   async function act(action, payload = {}) {
@@ -280,45 +274,29 @@
     syncForm();
   }
 
-  async function setMode(mode) {
-    await act("set-schedule-mode", { mode });
-    toast(`调度模式已切换为 ${mode === "containers" ? "容器优先" : "任务数量优先"}`);
-  }
-  $("#modeSelect").addEventListener("change", (event) => setMode(event.target.value));
   $("#modeBadge").addEventListener("click", async () => {
     const current = ((state.snapshot || {}).queue || {}).scheduleMode || "containers";
-    await setMode(current === "containers" ? "tasks" : "containers");
-  });
-
-  $("#saveLimitsBtn").addEventListener("click", async () => {
+    const mode = current === "containers" ? "tasks" : "containers";
     try {
-      await act("set-limits", {
-        maxTasks: Number($("#maxTasksInput").value),
-        maxContainers: Number($("#maxContainersInput").value),
-        candidatesPerTask: Number($("#candidatesInput").value),
-        containerRefillBelow: Number($("#refillInput").value),
-        startupTimeoutSeconds: Number($("#startupTimeoutInput").value),
-        containerReserveSeconds: Number($("#reserveInput").value),
-        reconcileSeconds: Number($("#reconcileInput").value),
-      });
-      toast("上限参数已保存");
+      await act("set-schedule-mode", { mode });
+      toast(`调度模式已切换为 ${mode === "containers" ? "容器优先" : "任务数量优先"}`);
     } catch (error) {
-      toast(`保存失败：${error.message}`, true);
+      toast(`切换失败：${error.message}`, true);
     }
   });
-
 
   /* ------------------------------------------------------------------ scope */
   function renderScope() {
     const queue = (state.snapshot || {}).queue || {};
     const active = queue.activeRoots || [];
-    setText($("#scopeMeta"), `${active.length} 个目录`);
-    setHtml($("#scopeKv"), [
-      ["默认文件夹", (state.snapshot || {}).selectedFolderId || "未选择"],
+    const folder = state.folders.find((item) => item.id === (state.snapshot || {}).selectedFolderId);
+    setText($("#scopeMeta"), `${active.length} 个目录生效`);
+    setHtml($("#scopeKv"), kvHtml([
+      ["默认文件夹", folder ? folder.name : ((state.snapshot || {}).selectedFolderId || "未选择")],
       ["工作目录", (state.snapshot || {}).selectedFolderPath || active.join(" · ") || "—"],
       ["生效 roots", active.join("\n") || "—"],
       ["已配置 roots", (queue.roots || []).join("\n") || "—"],
-    ].map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join(""));
+    ]));
   }
 
   function renderDisabled() {
@@ -326,16 +304,14 @@
     setText($("#disabledMeta"), `${items.length} 个项目`);
     setHtml($("#disabledList"), items.map((item) => `
       <div class="item">
-        <div class="item-top">
-          <div style="min-width:0">
-            <div class="item-name">${esc(item.code)}${item.name && item.name !== item.code ? ` · ${esc(item.name)}` : ""}</div>
-            <div class="item-sub">${esc(item.reason || "手动禁用")} · ${esc(item.at || "")}</div>
-          </div>
-          <div class="item-tools">
-            <button class="btn sm" data-enable="${esc(item.code)}">恢复</button>
-          </div>
+        <div class="item-main">
+          <div class="item-name"><span class="t">${esc(item.name && item.name !== item.code ? item.name : item.code)}</span>${item.name && item.name !== item.code ? `<code>${esc(item.code)}</code>` : ""}</div>
+          <div class="item-sub">${esc(item.reason || "手动禁用")}<span class="sep">·</span>${esc(fmtClock(item.at))}</div>
         </div>
-      </div>`).join("") || `<div class="empty">没有被禁用的项目。</div>`);
+        <div class="item-tools">
+          <button class="btn sm" data-enable="${esc(item.code)}">恢复</button>
+        </div>
+      </div>`).join("") || `<div class="empty" style="padding:20px">没有被禁用的项目。</div>`);
   }
 
   $("#disabledList").addEventListener("click", async (event) => {
@@ -353,23 +329,51 @@
   });
 
   /* ----------------------------------------------------------------- health */
+  const LOOP_LABELS = { "auto-loop": "调度循环", "reconcile": "纠错循环", "snapshot-hub": "快照推送" };
+  const LOOP_STATUS = {
+    ok: ["ok", "正常"], failing: ["warn", "连续失败"], stalled: ["bad", "已卡住"],
+  };
+  function renderLoops(loops) {
+    setHtml($("#loopList"), loops.map((loop) => {
+      const [tone, label] = LOOP_STATUS[loop.status] || ["idle", loop.status];
+      const bits = [
+        `上次完成 ${fmtDuration(loop.secondsSinceBeat)} 前`,
+        loop.busySeconds ? `本轮已运行 ${fmtDuration(loop.busySeconds)}` : "",
+        loop.failures ? `连续失败 ${loop.failures} 次` : "",
+        loop.restarts ? `已自动重启 ${loop.restarts} 次` : "",
+      ].filter(Boolean);
+      return `<div class="item" data-tone="${tone}">
+        <div class="item-main">
+          <div class="item-name"><span class="t">${esc(LOOP_LABELS[loop.name] || loop.name)}</span><code>${esc(loop.name)}</code></div>
+          <div class="item-sub">${bits.map(esc).join('<span class="sep">·</span>')}</div>
+          ${loop.lastError && loop.status !== "ok" ? `<div class="item-notice">${esc(loop.lastError)}</div>` : ""}
+        </div>
+        <span class="pill dot" data-tone="${tone}">${esc(label)}</span>
+      </div>`;
+    }).join(""));
+  }
+
   async function loadHealth() {
     try {
       const data = await fetchJson("/api/health");
       const stats = data.stats || {};
       const hub = stats.hub || {};
-      setHtml($("#healthKv"), [
+      setHtml($("#healthKv"), kvHtml([
         ["运行时长", fmtDuration(stats.uptimeSeconds)],
         ["SSE 订阅数", hub.subscribers ?? 0],
         ["快照版本", hub.revision ?? 0],
         ["上次构建", `${hub.lastBuildMs ?? 0} ms`],
         ["快照间隔", `${hub.intervalSeconds ?? 0} s`],
         ["跟踪任务", hub.trackedTasks ?? 0],
-        ["文件缓存", `命中 ${(stats.fileCache || {}).hits ?? 0} / 未命中 ${(stats.fileCache || {}).misses ?? 0}`],
+        ["文件缓存", `${(stats.fileCache || {}).hits ?? 0} / ${(stats.fileCache || {}).misses ?? 0}`],
         ["日志订阅", stats.logSubscribers ?? 0],
         ["上次纠错", fmtClock(stats.lastReconcileAt)],
-      ].map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join(""));
-      setText($("#healthMeta"), hub.lastError ? `快照异常：${hub.lastError}` : "正常");
+      ]));
+      renderLoops(stats.loops || []);
+      const stalled = (stats.loops || []).filter((loop) => loop.status === "stalled").map((loop) => LOOP_LABELS[loop.name] || loop.name);
+      setText($("#healthMeta"), stalled.length
+        ? `${stalled.join("、")} 已卡住`
+        : hub.lastError ? `快照异常：${hub.lastError}` : "正常");
     } catch (error) {
       setText($("#healthMeta"), `读取失败：${error.message}`);
     }
@@ -378,7 +382,6 @@
   function applySnapshot(payload) {
     state.snapshot = payload;
     renderRail({ ...payload, connected: state.connected, error: state.error });
-    renderMetrics(payload);
     syncForm();
     renderScope();
     renderDisabled();
@@ -392,7 +395,6 @@
       if (payload.summary) state.snapshot.summary = payload.summary;
       if (payload.containers) state.snapshot.containers = payload.containers;
       renderRail({ ...state.snapshot, connected: state.connected, error: state.error });
-      renderMetrics(state.snapshot);
       syncForm();
       renderScope();
       renderDisabled();
@@ -407,7 +409,7 @@
 
   fetchJson("/api/snapshot").then(applySnapshot).catch((error) => toast(`初始化失败：${error.message}`, true));
   loadSettings();
-  loadFolders();
+  loadFolders().then(() => { if (state.snapshot) renderScope(); });
   loadHealth();
   setInterval(() => { if (!document.hidden) loadHealth(); }, 5000);
 </script>

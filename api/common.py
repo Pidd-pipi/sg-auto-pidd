@@ -36,6 +36,9 @@ DEFAULT_QUEUE_RETRY_BACKOFF_SECONDS = 90
 DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS = 12 * 60 * 60
 DEFAULT_STALLED_TASK_RETRY_SECONDS = 10 * 60
 DEFAULT_STALLED_TASK_RETRY_LIMIT = 1
+# The next N pending items the queue page previews; auto refill never
+# reshuffles them, so what the operator sees is what launches next.
+AUTO_REFILL_PREVIEW_SIZE = 10
 MANAGER_TOKEN_SERVICE = "solo-manager-token"
 MANAGER_PASSWORD_SERVICE = "solo-manager-password"
 STOP_TASKS_PATH = Path(os.environ.get("SOLOSB_STOP_TASKS_PATH", str(STATE_DIR / "stop-tasks.json")))
@@ -109,6 +112,11 @@ DEFAULT_RECONCILE_SECONDS = 60
 DEFAULT_STARTUP_GRACE_SECONDS = 100
 DEFAULT_QUOTA_SETTLE_TIMEOUT_SECONDS = 6 * 3600
 DEFAULT_ORPHAN_GRACE_SECONDS = 1800
+# A candidate marked ``running`` that gets no container for this long while the
+# container limit has room is treated as belonging to a dead executor.
+DEFAULT_PHANTOM_DEMAND_SECONDS = 600
+MIN_PHANTOM_DEMAND_SECONDS = 120
+MAX_PHANTOM_DEMAND_SECONDS = 7200
 
 DEFAULT_AUTO_TRIGGER_PROMPT = (
     "使用 `$sologsb-0917`，在监控队列提供的监控工作目录下执行一道完整的 Pair-wise GSB。"
@@ -172,18 +180,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "terminalStabilitySeconds": 6,
         "waitTimeoutSeconds": DEFAULT_QUEUE_WAIT_TIMEOUT_SECONDS,
         "maxContainers": DEFAULT_MAX_CANDIDATE_CONTAINERS,
-        "containerRefillBelow": DEFAULT_CONTAINER_REFILL_BELOW,
         "candidatesPerTask": 2,
-        "containerReserveSeconds": DEFAULT_CONTAINER_RESERVE_SECONDS,
         "anthropicBaseUrl": "https://llm2.jzxhnh.com",
         "scheduleMode": SCHEDULE_MODE_CONTAINERS,
         "reconcileSeconds": DEFAULT_RECONCILE_SECONDS,
         "startupGraceSeconds": DEFAULT_STARTUP_GRACE_SECONDS,
-        "keyConcurrency": {
-            "maxParallelRequests": DEFAULT_KEY_MAX_PARALLEL_REQUESTS,
-            "reservedSlots": DEFAULT_KEY_RESERVED_SLOTS,
-            "maxCandidateContainers": DEFAULT_MAX_CANDIDATE_CONTAINERS,
-        },
         "excludedProjectCodes": [],
         "maxAttempts": 3,
         "retryBackoffSeconds": DEFAULT_QUEUE_RETRY_BACKOFF_SECONDS,
@@ -201,7 +202,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "difficulty": "困难",
         },
         "paused": True,
+        # Every process start begins paused (the saved ``paused`` is ignored):
+        # a service back from a crash, a deploy or a reboot should not launch
+        # tasks before an operator has looked at the queue.
+        "pauseOnStart": True,
         "reapOrphanWorkers": True,
+        # Fallback policies (api/guard.py); ``observe`` only flags and logs.
+        "guard": {
+            "mode": "observe",
+            "candidatePhaseHours": 6,
+            "noProgressMinutes": 60,
+            "leakedProcessMinutes": 60,
+        },
         "promptTemplate": DEFAULT_AUTO_TRIGGER_PROMPT,
     },
     "monitor": {
@@ -360,12 +372,18 @@ def save_config(config: dict[str, Any], path: Path | None = None) -> None:
     atomic_write_json(target, clean)
 
 
+def auto_refill_interval_seconds(cfg: dict[str, Any]) -> int:
+    return max(30, int(cfg.get("intervalSeconds") or 180))
+
+
 def public_auto_refill_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg = (config.get("automation") or {}).get("autoRefill") or {}
     task_types = [str(value).strip() for value in (cfg.get("taskTypes") or []) if str(value).strip()]
     weights = cfg.get("taskTypeWeights") if isinstance(cfg.get("taskTypeWeights"), dict) else {}
     return {
         "enabled": bool(cfg.get("enabled")),
+        "intervalSeconds": auto_refill_interval_seconds(cfg),
+        "previewSize": AUTO_REFILL_PREVIEW_SIZE,
         "targetPending": max(1, int(cfg.get("targetPending") or 20)),
         "taskTypes": task_types,
         "taskTypeWeights": {str(key): value for key, value in weights.items()},
@@ -411,23 +429,39 @@ def queue_failure_retryable(result: dict[str, Any] | None, error: Any) -> bool:
     return queue_error_retryable(error)
 
 
+# ``security`` can block on an unlock prompt when the login keychain is locked
+# (screen locked overnight).  Without a timeout that froze whichever scheduler
+# loop asked for the Manager password, and nothing ever unfroze it.
+KEYCHAIN_TIMEOUT_SECONDS = 10
+
+
 def keychain_read(service: str) -> str:
-    proc = subprocess.run(
-        ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", service, "-w"],
-        text=True,
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", service, "-w"],
+            text=True,
+            capture_output=True,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def keychain_write(service: str, value: str) -> None:
     if not str(value or "").strip():
         raise MonitorError(f"拒绝写入空凭据到 Keychain: {service}")
-    proc = subprocess.run(
-        ["security", "add-generic-password", "-a", os.environ.get("USER", ""), "-s", service, "-U", "-w", value],
-        text=True,
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["security", "add-generic-password", "-a", os.environ.get("USER", ""), "-s", service, "-U", "-w", value],
+            text=True,
+            capture_output=True,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MonitorError(f"写入 Keychain 超时（钥匙串可能已锁定）: {service}") from exc
+    except OSError as exc:
+        raise MonitorError(f"写入 Keychain 失败: {service}: {exc}") from exc
     if proc.returncode != 0:
         raise MonitorError(f"写入 Keychain 失败: {service}: {proc.stderr.strip()}")
 

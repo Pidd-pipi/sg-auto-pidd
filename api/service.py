@@ -22,17 +22,21 @@ from pathlib import Path
 from typing import Any
 
 from .common import (
+    AUTO_REFILL_PREVIEW_SIZE,
     AUTO_STATE_PATH,
     DEFAULT_ROOT,
-    DEFAULT_STARTUP_GRACE_SECONDS,
     DISMISSED_TASKS_PATH,
     QUEUE_ACTIVE_STATUSES,
+    QUEUE_STATE_PATH,
+    SCHEDULER_LOG_PATH,
     SIDES,
+    STATE_DIR,
     TERMINAL_TASK_STATUSES,
     FileCache,
     MonitorError,
     ProcessTable,
     atomic_write_json,
+    auto_refill_interval_seconds,
     clamp_int,
     deep_merge,
     read_json,
@@ -40,9 +44,11 @@ from .common import (
     utc_now,
 )
 from .folders import FolderProvider
+from .guard import GUARD_MODES, TaskGuard, guard_settings
+from .health import LoopHealth, Watchdog
 from .logs import SchedulerLog
 from .platform import PlatformProvider, SubmissionProvider
-from .scheduler import JobManager, QueueManager, ReconcileLoop
+from .scheduler import SKILL_ABSOLUTE_MAX_CONTAINERS, JobManager, QueueManager, ReconcileLoop, prune_legacy_automation
 from .tasks import DockerCache, TaskScanner, TraceCache, read_trace_events
 
 HEARTBEAT_SECONDS = 10.0
@@ -91,16 +97,24 @@ class SnapshotHub:
         self._stop.set()
 
     def _run(self) -> None:
+        health = getattr(self.service, "health", None)
         while not self._stop.wait(self.interval):
+            if health is not None:
+                health.begin("snapshot-hub")
+            error = ""
             try:
                 self.build_once()
             except Exception as exc:  # pragma: no cover - defensive
-                self.last_error = str(exc)
+                error = str(exc)
+                self.last_error = error
                 if self.service.log is not None:
                     try:
-                        self.service.log.emit("snapshot.failed", level="error", detail=str(exc))
+                        self.service.log.emit("snapshot.failed", level="error", detail=error)
                     except Exception:
                         pass
+            finally:
+                if health is not None:
+                    health.end("snapshot-hub", error)
 
     # -- building --------------------------------------------------------- #
     def build_once(self, *, force: bool = False) -> dict[str, Any] | None:
@@ -201,6 +215,15 @@ class SchedulerService:
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
+        removed = prune_legacy_automation(config.setdefault("automation", {}))
+        automation = config["automation"]
+        # The queue starts paused on every process start unless the operator
+        # turned ``pauseOnStart`` off.  The saved ``paused`` is what the queue
+        # was doing when the previous process died; resuming it blindly meant a
+        # crash-restart or a deploy could launch tasks with nobody watching.
+        self._paused_on_start = bool(automation.get("pauseOnStart", True)) and not bool(automation.get("paused", True))
+        if self._paused_on_start:
+            automation["paused"] = True
         monitor_cfg = config.get("monitor") or {}
         self.file_cache = FileCache()
         self.process_table = ProcessTable(float(monitor_cfg.get("dockerCacheSeconds") or 2.0))
@@ -209,12 +232,18 @@ class SchedulerService:
             lightweight=not bool(monitor_cfg.get("parseTraceOnSnapshot", False)),
         )
         self.docker_cache = DockerCache(float(monitor_cfg.get("dockerCacheSeconds") or 2.0))
-        self.log = SchedulerLog()
+        # ``_stateDir`` redirects every piece of persisted state (tests set it).
+        # Without this the suite wrote into the live queue, log and slot ledger.
+        custom_state = str(config.get("_stateDir") or "").strip()
+        self.state_dir = Path(custom_state) if custom_state else STATE_DIR
+        self._dismissed_path = self.state_dir / DISMISSED_TASKS_PATH.name
+        self._auto_path = self.state_dir / AUTO_STATE_PATH.name
+        self.log = SchedulerLog(self.state_dir / SCHEDULER_LOG_PATH.name)
         self.settings = None  # set by server once STATE_DIR is known
         self.folders = FolderProvider()
         self.platform = PlatformProvider(config)
         self.submissions_provider = SubmissionProvider(config)
-        self.jobs = JobManager(config, process_table=self.process_table)
+        self.jobs = JobManager(config, process_table=self.process_table, state_dir=self.state_dir / "jobs")
         self.queue = QueueManager(
             config,
             self.jobs,
@@ -222,6 +251,9 @@ class SchedulerService:
             file_cache=self.file_cache,
             process_table=self.process_table,
             log=self.log,
+            state_path=self.state_dir / QUEUE_STATE_PATH.name,
+            slot_root=(self.state_dir / "container-slots") if custom_state else None,
+            platform=self.platform,
         )
         self.scanner = TaskScanner(
             config,
@@ -238,7 +270,7 @@ class SchedulerService:
         self._queue_refill_lock = threading.RLock()
         self._last_queue_refill_at = 0.0
         self._refill_rng = random.SystemRandom()
-        self._last_queue_refill = {"status": "idle", "message": "尚未运行", "at": ""}
+        self._last_queue_refill = dict(self.queue.refill_status)
         self.reconcile = ReconcileLoop(
             self.queue,
             self.jobs,
@@ -248,15 +280,33 @@ class SchedulerService:
                 (config.get("automation") or {}).get("reconcileSeconds"), 15, 3600, 60
             ),
         )
+        self.guard = TaskGuard(self.queue, log=self.log, platform=self.platform)
+        self.reconcile.guard = self.guard
         self._stop = threading.Event()
         self._loops: list[threading.Thread] = []
+        self._auto_thread: threading.Thread | None = None
+        self._auto_interval = 3.0
+        self.health = LoopHealth()
+        self.reconcile.health = self.health
+        self.watchdog = Watchdog(
+            self.health,
+            emit=self.log.emit,
+            interval=float(((config.get("monitor") or {}).get("watchdogSeconds")) or 30),
+        )
         self.started_at = time.time()
         self._snapshot_builds = 0
         self.log.emit("service.started", detail=f"pid={os.getpid()} 扫描目录={', '.join(self.queue.active_roots())}")
+        if removed:
+            self.log.emit("config.migrated", detail=f"移除已废弃配置项：{', '.join(removed)}")
+        if self._paused_on_start:
+            # Persist so config.json and the page agree on what the queue is doing.
+            self._persist_config()
+            self.log.emit("config.paused_on_start",
+                          detail="启动时默认暂停队列（automation.pauseOnStart），需在队列页手动「启动队列」")
 
     # -- persisted small state ------------------------------------------- #
     def _load_dismissed_tasks(self) -> dict[str, dict[str, Any]]:
-        raw = read_json(DISMISSED_TASKS_PATH, {})
+        raw = read_json(self._dismissed_path, {})
         items = raw.get("items") if isinstance(raw, dict) else raw
         if isinstance(items, list):
             return {str(task_id): {"dismissedAt": ""} for task_id in items if str(task_id)}
@@ -269,10 +319,10 @@ class SchedulerService:
         }
 
     def _save_dismissed_tasks_locked(self) -> None:
-        atomic_write_json(DISMISSED_TASKS_PATH, {"items": copy.deepcopy(self._dismissed), "updatedAt": utc_now()})
+        atomic_write_json(self._dismissed_path, {"items": copy.deepcopy(self._dismissed), "updatedAt": utc_now()})
 
     def _load_auto(self) -> dict[str, Any]:
-        raw = read_json(AUTO_STATE_PATH, {})
+        raw = read_json(self._auto_path, {})
         if not isinstance(raw, dict):
             raw = {}
         return deep_merge(
@@ -287,7 +337,7 @@ class SchedulerService:
         )
 
     def _save_auto(self) -> None:
-        atomic_write_json(AUTO_STATE_PATH, self._auto)
+        atomic_write_json(self._auto_path, self._auto)
 
     def _append_auto_log(self, level: str, message: str) -> None:
         log = self._auto.setdefault("log", [])
@@ -324,20 +374,31 @@ class SchedulerService:
                 self.log.emit("settings.folder", detail=f"采用已保存的默认文件夹 {saved_folder}")
             except MonitorError as exc:
                 self.log.emit("settings.folder_failed", level="warning", detail=str(exc))
-        self.hub.start()
-        self.reconcile.start()
         auto_interval = float(((self.config.get("monitor") or {}).get("autoResume") or {}).get("tickSeconds") or 15)
         queue_interval = float((self.config.get("automation") or {}).get("tickSeconds") or 3)
-        interval = max(1.0, min(auto_interval, queue_interval))
-        for name, target in (
-            ("auto-loop", self._auto_loop),
-        ):
-            thread = threading.Thread(target=target, args=(interval,), name=name, daemon=True)
-            thread.start()
-            self._loops.append(thread)
+        self._auto_interval = max(1.0, min(auto_interval, queue_interval))
+        self.health.register("snapshot-hub", self.hub.interval)
+        self.health.register("reconcile", self.reconcile.interval_seconds,
+                             stall_after=max(600.0, self.reconcile.interval_seconds * 5.0))
+        self.health.register("auto-loop", self._auto_interval)
+        self.hub.start()
+        self.reconcile.start()
+        self._start_auto_loop()
+        self.watchdog.supervise("snapshot-hub", lambda: self.hub._thread, self.hub.start)
+        self.watchdog.supervise("reconcile", lambda: self.reconcile._thread, self.reconcile.start)
+        self.watchdog.supervise("auto-loop", lambda: self._auto_thread, self._start_auto_loop)
+        self.watchdog.start()
+
+    def _start_auto_loop(self) -> threading.Thread:
+        thread = threading.Thread(target=self._auto_loop, args=(self._auto_interval,), name="auto-loop", daemon=True)
+        thread.start()
+        self._auto_thread = thread
+        self._loops = [item for item in self._loops if item.is_alive()] + [thread]
+        return thread
 
     def stop(self) -> None:
         self._stop.set()
+        self.watchdog.stop()
         self.hub.stop()
         self.reconcile.stop()
         self.log.close()
@@ -345,24 +406,33 @@ class SchedulerService:
 
     def _auto_loop(self, interval: float) -> None:
         while not self._stop.wait(interval):
-            for label, fn in (
-                ("stop-tasks", self.enforce_stop_tasks),
-                ("queue-refill", self.maybe_refill_queue),
-                ("auto-resume", self.maybe_auto_resume),
-                ("queue-tick", lambda: self.queue.tick(platform=self.platform)),
-            ):
-                try:
-                    result = fn()
-                except Exception as exc:
-                    self.log.emit(f"loop.{label}.failed", level="error", detail=str(exc))
-                    continue
-                if isinstance(result, list) and result:
-                    for action in result:
-                        self.log.emit(
-                            f"loop.{label}",
-                            detail=_describe_action(action),
-                            taskId=str((action.get("item") or action.get("task") or {}).get("id") or ""),
-                        )
+            self.health.begin("auto-loop")
+            errors: list[str] = []
+            try:
+                self._auto_iteration(errors)
+            finally:
+                self.health.end("auto-loop", "; ".join(errors))
+
+    def _auto_iteration(self, errors: list[str]) -> None:
+        for label, fn in (
+            ("stop-tasks", self.enforce_stop_tasks),
+            ("queue-refill", self.maybe_refill_queue),
+            ("auto-resume", self.maybe_auto_resume),
+            ("queue-tick", lambda: self.queue.tick(platform=self.platform)),
+        ):
+            try:
+                result = fn()
+            except Exception as exc:
+                errors.append(f"{label}: {exc}")
+                self.log.emit(f"loop.{label}.failed", level="error", detail=str(exc))
+                continue
+            if isinstance(result, list) and result:
+                for action in result:
+                    self.log.emit(
+                        f"loop.{label}",
+                        detail=_describe_action(action),
+                        taskId=str((action.get("item") or action.get("task") or {}).get("id") or ""),
+                    )
 
     # -- snapshot --------------------------------------------------------- #
     def _active_roots(self) -> list[Path]:
@@ -583,6 +653,10 @@ class SchedulerService:
             self._persist_config()
             self.log.emit("config.project_pool", detail=f"包含项目池 → {enabled}")
             return self.queue.fast_snapshot()
+        if action == "set-guard":
+            return self._set_guard(payload)
+        if action == "set-auto-refill":
+            return self._set_auto_refill(bool(payload.get("enabled")))
         if action == "set-auto-refill-weights":
             weights = payload.get("weights")
             if not isinstance(weights, dict):
@@ -673,6 +747,13 @@ class SchedulerService:
         save_config(self.config, Path(str(self.config.get("_configPath") or CONFIG_PATH)))
 
     def _set_limits(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """The only knobs an operator needs; everything else has safe defaults.
+
+        ``maxContainers`` is the single container limit: it is also written to
+        the skill's ``container-limit.json`` so the executor enforces the same
+        number.  Legacy keys (refill threshold, reserve/startup windows, …) are
+        accepted from old clients and ignored.
+        """
         automation = self.config.setdefault("automation", {})
         changes: list[str] = []
         if "maxTasks" in payload:
@@ -683,44 +764,27 @@ class SchedulerService:
             changes.append(f"maxTasks={value}")
         if "maxContainers" in payload:
             value = int(payload.get("maxContainers") or 0)
-            if value < 1 or value > 20:
-                raise MonitorError("最大容器数必须在 1 到 20 之间")
+            if value < 1 or value > SKILL_ABSOLUTE_MAX_CONTAINERS:
+                raise MonitorError(f"最大容器数必须在 1 到 {SKILL_ABSOLUTE_MAX_CONTAINERS} 之间（技能侧硬顶）")
             automation["maxContainers"] = value
-            automation.setdefault("keyConcurrency", {})["maxCandidateContainers"] = value
             changes.append(f"maxContainers={value}")
         if "candidatesPerTask" in payload:
             value = int(payload.get("candidatesPerTask") or 0)
-            if value < 1 or value > 8:
-                raise MonitorError("单任务备选容器数必须在 1 到 8 之间")
+            if value < 2 or value > 8:
+                raise MonitorError("单任务候选数必须在 2 到 8 之间")
             automation["candidatesPerTask"] = value
             changes.append(f"candidatesPerTask={value}")
-        if "containerRefillBelow" in payload:
-            value = int(payload.get("containerRefillBelow") or 0)
-            if value < 1 or value > 20:
-                raise MonitorError("补位阈值必须在 1 到 20 之间")
-            automation["containerRefillBelow"] = value
-            changes.append(f"containerRefillBelow={value}")
-        if "startupTimeoutSeconds" in payload:
-            automation["startupTimeoutSeconds"] = clamp_int(
-                payload.get("startupTimeoutSeconds"), 300, 600, 300
-            )
-            changes.append(f"startupTimeoutSeconds={automation['startupTimeoutSeconds']}")
-        if "containerReserveSeconds" in payload:
-            automation["containerReserveSeconds"] = clamp_int(
-                payload.get("containerReserveSeconds"), 300, 600, 420
-            )
-            changes.append(f"containerReserveSeconds={automation['containerReserveSeconds']}")
-        if "startupGraceSeconds" in payload:
-            automation["startupGraceSeconds"] = clamp_int(
-                payload.get("startupGraceSeconds"), 0, 3600, DEFAULT_STARTUP_GRACE_SECONDS
-            )
-            changes.append(f"startupGraceSeconds={automation['startupGraceSeconds']}")
-        if "reconcileSeconds" in payload:
-            automation["reconcileSeconds"] = clamp_int(payload.get("reconcileSeconds"), 15, 3600, 60)
-            changes.append(f"reconcileSeconds={automation['reconcileSeconds']}")
+        if "cooldownSeconds" in payload:
+            value = int(payload.get("cooldownSeconds") or 0)
+            if value < 0 or value > 86400:
+                raise MonitorError("启动间隔必须在 0 到 86400 秒之间")
+            automation["cooldownSeconds"] = value
+            changes.append(f"cooldownSeconds={value}")
         if not changes:
             raise MonitorError("没有需要更新的上限参数")
+        prune_legacy_automation(automation)
         self._persist_config()
+        self.queue.sync_skill_limits()
         self.log.emit("config.limits", detail="，".join(changes))
         return self.queue.fast_snapshot()
 
@@ -749,6 +813,53 @@ class SchedulerService:
                 changed = True
         if changed:
             self.queue._save()
+
+    def _set_auto_refill(self, enabled: bool) -> dict[str, Any]:
+        with self._queue_refill_lock:
+            self.config.setdefault("automation", {}).setdefault("autoRefill", {})["enabled"] = enabled
+            self._persist_config()
+            # Turning it on refills on the next loop pass instead of waiting
+            # out the interval; turning it off says so on the page right away.
+            self._last_queue_refill_at = 0.0
+            if not enabled:
+                self._record_refill({"status": "disabled", "added": 0, "message": "已关闭，不再自动补充",
+                                     "at": utc_now()})
+        self.log.emit("config.auto_refill", detail=f"自动补队 → {'开启' if enabled else '关闭'}")
+        return self.queue.fast_snapshot()
+
+    def _set_guard(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cfg = self.config.setdefault("automation", {}).setdefault("guard", {})
+        changes: list[str] = []
+        if "mode" in payload:
+            mode = str(payload.get("mode") or "")
+            if mode not in GUARD_MODES:
+                raise MonitorError("兜底模式只能是 off、observe 或 enforce")
+            cfg["mode"] = mode
+            changes.append(f"mode={mode}")
+        for key, low, high in (("candidatePhaseHours", 1, 48), ("noProgressMinutes", 15, 1440),
+                               ("leakedProcessMinutes", 10, 1440)):
+            if key not in payload:
+                continue
+            try:
+                value = float(payload.get(key))
+            except (TypeError, ValueError):
+                raise MonitorError(f"{key} 必须是数字") from None
+            if value < low or value > high:
+                raise MonitorError(f"{key} 必须在 {low} 到 {high} 之间")
+            cfg[key] = value if key == "candidatePhaseHours" else int(value)
+            changes.append(f"{key}={cfg[key]:g}")
+        if not changes:
+            raise MonitorError("没有需要更新的兜底参数")
+        self._persist_config()
+        self.log.emit("config.guard", detail="，".join(changes))
+        # Reflect the new settings right away; flags follow on the next round.
+        self.queue.guard_status = {**self.queue.guard_status, **guard_settings(self.config)}
+        return self.queue.fast_snapshot()
+
+    def _record_refill(self, result: dict[str, Any]) -> None:
+        self._last_queue_refill = result
+        self.queue.refill_status = {key: result.get(key) for key in ("status", "added", "pending", "message", "at")
+                                    if key in result}
 
     def _set_refill_weights(self, weights: dict[str, Any]) -> dict[str, Any]:
         with self.queue._lock:
@@ -1029,9 +1140,9 @@ class SchedulerService:
         if not self.queue.active_roots():
             result = {"status": "no-active-roots", "added": 0, "validated": 0, "failed": 0,
                       "message": "未选择 Codex 任务目录，停止补队", "at": utc_now(), "cached": False}
-            self._last_queue_refill = result
+            self._record_refill(result)
             return copy.deepcopy(result)
-        interval = max(30, int(cfg.get("intervalSeconds") or 180))
+        interval = auto_refill_interval_seconds(cfg)
         now = time.time()
         with self._queue_refill_lock:
             if now - self._last_queue_refill_at < interval:
@@ -1110,13 +1221,20 @@ class SchedulerService:
                 reason = reasons_by_type.get(task_type, {}).get(code) or ""
                 # Only fail on an explicit, deterministic exclusion; a missing item
                 # can be pagination or transient filtering and must not discard work.
-                if not reason or not any(marker in reason for marker in ("配额", "缺少可用源码", "已占用", "不可选用")):
+                # "已占用/运行中" is transient too — it is usually this very item's
+                # previous run still finishing — so it waits instead of failing.
+                if not reason or "已占用" in reason or "运行中" in reason:
+                    continue
+                if not any(marker in reason for marker in ("配额", "缺少可用源码", "不可选用")):
                     continue
                 if self.queue.fail_item(str(item.get("id") or ""), f"启动前配额复核未通过：{reason}"):
                     failed += 1
 
             pending = self.queue.pending_count()
-            shuffled = self.queue.shuffle_pending(self._refill_rng) if randomize and shuffle_existing else False
+            shuffled = (
+                self.queue.shuffle_pending(self._refill_rng, keep_head=AUTO_REFILL_PREVIEW_SIZE)
+                if randomize and shuffle_existing else False
+            )
             effective_target = max(0, target - active_count)
             tracked = self.queue.tracked_project_codes()
             added = 0
@@ -1205,7 +1323,7 @@ class SchedulerService:
             if errors:
                 message += f"，部分任务类型失败：{' | '.join(errors[-2:])}"
             result["message"] = message
-            self._last_queue_refill = result
+            self._record_refill(result)
             return copy.deepcopy(result)
 
     def maybe_auto_resume(self) -> list[dict[str, Any]]:
@@ -1291,6 +1409,8 @@ class SchedulerService:
             "fileCache": self.file_cache.stats(),
             "logSubscribers": self.log.subscriber_count(),
             "lastReconcileAt": self.reconcile.last_run_at,
+            "loops": self.health.snapshot(),
+            "healthy": self.health.healthy(),
         }
 
 

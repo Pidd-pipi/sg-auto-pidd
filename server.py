@@ -14,6 +14,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import signal
 import socket
 import sys
 import time
@@ -26,11 +27,16 @@ from typing import Any
 from api.common import CONFIG_PATH, MonitorError, load_config, save_config, utc_now
 from api.service import SchedulerService
 from api.common import SettingsStore
+from api.version import APP_VERSION, version_info
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 INDEX_PATH = STATIC_DIR / "index.html"
 IMMUTABLE_SUFFIXES = {".woff2", ".woff", ".ttf", ".otf"}
 GZIP_MIN_BYTES = 512
+MAX_LOG_LIMIT = 2000
+# Every page polls and holds an SSE stream, so logging each 200/304 grew the
+# unattended log by megabytes a day while hiding the lines that matter.
+ACCESS_LOG = os.environ.get("SOLOGSB_ACCESS_LOG", "").lower() in {"1", "true", "yes"}
 
 
 def lan_ip() -> str:
@@ -107,7 +113,7 @@ class MonitorHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "sologsb-monitor/2.0"
+    server_version = f"sologsb-monitor/{APP_VERSION}"
     protocol_version = "HTTP/1.1"
 
     @property
@@ -116,6 +122,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        try:
+            status = int(getattr(code, "value", code))
+        except (TypeError, ValueError):
+            status = 0
+        if ACCESS_LOG or status >= 400:
+            super().log_request(code, size)
 
     # -- response helpers ------------------------------------------------- #
     def _accepts_gzip(self) -> bool:
@@ -139,6 +153,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.NOT_MODIFIED)
                 for key, value in headers:
                     self.send_header(key, value)
+                self.send_header("Cache-Control", cache)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
@@ -332,13 +347,22 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/static/"):
                 self._serve_static(path.removeprefix("/static/"))
                 return
+            if path == "/api/version":
+                self._json(version_info())
+                return
             if path == "/api/health":
+                version = version_info()
+                stats = self.service.stats()
                 self._json({
-                    "ok": True,
+                    # False when a background loop has stopped beating; the
+                    # keepalive supervisor restarts the process on it.
+                    "ok": bool(stats.get("healthy", True)),
                     "service": "sologsb-monitor",
+                    "version": version["version"],
+                    "gitCommit": version["gitCommit"],
                     "time": utc_now(),
                     "uptimeSeconds": round(time.time() - self.server.started_at, 1),  # type: ignore[attr-defined]
-                    "stats": self.service.stats(),
+                    "stats": stats,
                 })
                 return
             if path == "/api/stream":
@@ -399,6 +423,7 @@ class Handler(BaseHTTPRequestHandler):
                     limit = int((query.get("limit") or ["200"])[0])
                 except ValueError:
                     limit = 200
+                limit = max(1, min(limit, MAX_LOG_LIMIT))
                 level = str((query.get("level") or [""])[0])
                 entries = self.service.log.after(after_seq, limit=limit)
                 if level:
@@ -565,8 +590,14 @@ def main() -> int:
         print(f"无法监听 {host}:{port}: {exc}", file=sys.stderr)
         return 2
 
+    def _graceful_exit(_signum, _frame):
+        # SIGTERM from the keepalive supervisor (or launchd) takes the same
+        # path as Ctrl-C, so the service logs its stop and releases the lock.
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _graceful_exit)
     service.start()
-    print("sologsb-monitor 已启动")
+    print("sologsb-monitor 已启动", flush=True)
     print(f"本机访问: http://127.0.0.1:{port}")
     if host == "0.0.0.0":
         ip = lan_ip()

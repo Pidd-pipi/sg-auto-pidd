@@ -1,6 +1,7 @@
 """End-to-end tests against a live server on a throwaway state directory."""
 from __future__ import annotations
 
+import io
 import json
 import socket
 import sys
@@ -11,12 +12,14 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 APP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP))
 
 from api.common import SettingsStore  # noqa: E402
 from api.service import SchedulerService  # noqa: E402
+from api.version import APP_VERSION  # noqa: E402
 from server import Handler, MonitorInstanceLock, MonitorHTTPServer  # noqa: E402
 from tests.support import make_config, write_task  # noqa: E402
 
@@ -70,7 +73,47 @@ class LiveServerTests(unittest.TestCase):
         status, data = self._get("/api/health")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
+        self.assertEqual(data["version"], APP_VERSION)
+        self.assertIn("gitCommit", data)
         self.assertIn("hub", data["stats"])
+
+    def test_health_turns_false_when_a_loop_stalls(self):
+        health = self.service.health
+        health.register("test-loop", 1)
+        try:
+            health._loops["test-loop"]["lastBeatAt"] -= 10_000
+            _status, data = self._get("/api/health")
+            self.assertFalse(data["ok"])
+            stalled = [loop for loop in data["stats"]["loops"] if loop["name"] == "test-loop"]
+            self.assertEqual(stalled[0]["status"], "stalled")
+        finally:
+            health._loops.pop("test-loop", None)
+        _status, data = self._get("/api/health")
+        self.assertTrue(data["ok"])
+
+    def test_logs_limit_is_clamped(self):
+        with mock.patch.object(self.service.log, "after", wraps=self.service.log.after) as after:
+            status, _data = self._get("/api/logs?limit=999999999")
+        self.assertEqual(status, 200)
+        self.assertEqual(after.call_args.kwargs["limit"], 2000)
+
+    def test_only_failed_requests_are_access_logged(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self._get("/api/version")
+            with self.assertRaises(urllib.error.HTTPError):
+                self._get("/api/does-not-exist")
+        output = stderr.getvalue()
+        self.assertNotIn("/api/version", output)
+        self.assertIn("/api/does-not-exist", output)
+
+    def test_version_endpoint_reports_release_metadata(self):
+        status, data = self._get("/api/version")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["service"], "sologsb-monitor")
+        self.assertEqual(data["version"], APP_VERSION)
+        self.assertEqual(data["displayVersion"], f"v{APP_VERSION}")
+        self.assertIn("gitCommit", data)
+        self.assertIn("gitBranch", data)
 
     def test_task_list_is_slim_and_detail_is_heavy(self):
         status, data = self._get("/api/tasks")
@@ -171,6 +214,47 @@ class LiveServerTests(unittest.TestCase):
                     break
         self.assertIn(b"event: snapshot", buffer)
         self.assertIn(b'"tasks"', buffer)
+
+
+class PauseOnStartTests(unittest.TestCase):
+    """Every process start begins with the queue paused unless opted out."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        (self.root / "tasks").mkdir(parents=True, exist_ok=True)
+
+    def _service(self, **automation):
+        config = make_config(self.root)
+        config["automation"].update(automation)
+        service = SchedulerService(config)
+        self.addCleanup(service.stop)
+        return service, config
+
+    def _saved(self):
+        return json.loads((self.root / "config.json").read_text(encoding="utf-8"))
+
+    def test_default_pauses_a_queue_that_was_running(self):
+        service, config = self._service(paused=False)
+        self.assertTrue(config["automation"]["paused"])
+        self.assertTrue(service.queue.snapshot()["paused"])
+        # Persisted, so config.json and the page agree.
+        self.assertTrue(self._saved()["automation"]["paused"])
+        events = [json.loads(line)["event"] for line in
+                  (self.root / ".state" / "scheduler.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertIn("config.paused_on_start", events)
+
+    def test_opt_out_keeps_the_saved_state(self):
+        service, config = self._service(paused=False, pauseOnStart=False)
+        self.assertFalse(config["automation"]["paused"])
+        self.assertFalse(service.queue.snapshot()["paused"])
+
+    def test_already_paused_queue_is_not_rewritten(self):
+        service, config = self._service(paused=True)
+        self.assertTrue(config["automation"]["paused"])
+        self.assertFalse(service._paused_on_start)
+        self.assertFalse((self.root / "config.json").exists())
 
 
 class LockTests(unittest.TestCase):

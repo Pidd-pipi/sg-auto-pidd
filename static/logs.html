@@ -5,81 +5,94 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>调度日志 · sologsb 调度台</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260922-log-columns">
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("sologsb-theme-v3")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}catch(e){}</script>
+  <link rel="stylesheet" href="/static/app.css?v=0.3.0">
 </head>
 <body>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand">
-      <div class="rail-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-      <div class="rail-brand-text">
-        <p>sologsb</p>
-        <h1>调度台</h1>
-      </div>
-    </div>
-    <nav class="rail-nav">
-      <a href="/">监看<span class="count" id="navTasks">0</span></a>
-      <a href="/tasks">队列<span class="count" id="navQueue">0</span></a>
-      <a href="/settings">设置</a>
-      <a href="/logs" class="active">日志</a>
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="brand-text"><b>调度台</b><small>sologsb</small></span>
+    </a>
+    <nav class="nav">
+      <a href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>监看<span class="count" id="navTasks">0</span></a>
+      <a href="/tasks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>队列<span class="count" id="navQueue">0</span></a>
+      <a href="/logs" class="active" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>日志</a>
+      <a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg>设置</a>
     </nav>
-    <div class="rail-section">
-      <span class="rail-label">默认文件夹</span>
+    <div class="rail-group">
+      <label class="rail-label" for="folderSelect">默认文件夹</label>
       <select class="input" id="folderSelect"></select>
+      <div class="rail-path" id="folderPath"></div>
       <span class="rail-label">调度模式</span>
       <button class="mode-toggle" id="modeBadge" type="button" data-mode="containers"><span class="dot"></span>容器优先</button>
     </div>
     <div class="rail-foot">
-      <button class="btn ghost sm" id="themeBtn" type="button">切换主题</button>
-      <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
-      <div class="link" id="folderPath"></div>
+      <div class="rail-foot-row">
+        <div class="sync" id="sync"><span class="dot"></span><span id="syncText">连接中</span></div>
+        <button class="icon-btn" id="themeBtn" type="button" title="切换明暗主题" aria-label="切换明暗主题">
+          <svg class="theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg class="theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+      <div class="app-version" id="appVersion">v—</div>
     </div>
   </aside>
 
   <main class="main">
     <header class="head">
-      <div class="head-title">调度日志<small id="headMeta"></small></div>
-      <div class="head-spacer"></div>
+      <div class="head-main"><h2 class="head-title">调度日志</h2><span class="head-meta" id="logMeta"></span></div>
       <div class="head-tools">
-        <button class="btn ghost" id="clearBtn" type="button">清空视图</button>
+        <button class="btn ghost" id="clearBtn" type="button" title="只清空当前页面的视图，不删除日志文件">清空视图</button>
       </div>
     </header>
 
-    <div class="band" id="band"></div>
-
-    <div class="filters">
-      <div class="segmented" id="levelRow">
-        <button type="button" data-level="" class="active">全部</button>
-        <button type="button" data-level="info">info</button>
-        <button type="button" data-level="warning">warning</button>
-        <button type="button" data-level="error">error</button>
-        <button type="button" data-level="debug">debug</button>
-      </div>
-      <input class="input search" id="searchInput" type="search" placeholder="搜索事件 / 项目编号 / 详情" autocomplete="off">
-      <label class="switch"><input type="checkbox" id="followToggle" checked><span class="track"></span>自动滚动</label>
-      <span class="cell" id="logMeta"></span>
-    </div>
-
-    <div style="padding:16px 20px 40px">
-      <div class="logtable" id="logTable"></div>
-      <div class="empty" id="emptyState" hidden>还没有调度事件。</div>
+    <div class="page">
+      <section class="table">
+        <div class="table-sticky" style="border-bottom:0">
+          <div class="toolbar">
+            <div class="segmented" id="levelRow">
+              <button type="button" data-level="" class="active">全部</button>
+              <button type="button" data-level="info">Info</button>
+              <button type="button" data-level="warning">Warning</button>
+              <button type="button" data-level="error">Error</button>
+              <button type="button" data-level="debug">Debug</button>
+            </div>
+            <label class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input class="input" id="searchInput" type="search" placeholder="搜索事件 / 项目编号 / 详情" autocomplete="off">
+            </label>
+            <span class="grow"></span>
+            <label class="switch" title="有新日志时自动回到顶部（最新在上）"><input type="checkbox" id="followToggle" checked><span class="track"></span>跟随最新</label>
+          </div>
+          <div class="list-head logrow" style="height:auto;padding-block:8px">
+            <span>时间</span><span>级别</span><span>事件</span><span>详情</span>
+          </div>
+        </div>
+        <div class="logtable" id="logTable"></div>
+        <div class="empty" id="emptyState" hidden>还没有调度事件。</div>
+      </section>
     </div>
   </main>
 </div>
 
-<script src="/static/app.js?v=20260922-log-columns"></script>
+<script src="/static/app.js?v=0.3.0"></script>
 <script>
   const { $, $$, esc, debounce, fetchJson, postJson, fmtTime, toast,
-          initTheme, renderRail, renderMetrics, connectStream, setText, setHtml, setAttr } = window.SoloApp;
+          initTheme, renderRail, connectStream, renderKeyed, setText, setAttr } = window.SoloApp;
 
   const state = { entries: [], lastSeq: 0, query: "", level: "", follow: true, connected: false, error: "", snapshot: null };
   initTheme();
 
+  function detailText(entry) {
+    return typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail ?? "");
+  }
+
   function matches(entry) {
     if (state.level && String(entry.level || "") !== state.level) return false;
     if (!state.query) return true;
-    const hay = [entry.event, entry.projectCode, entry.taskId,
-      typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail || "")].join(" ").toLowerCase();
+    const hay = [entry.event, entry.projectCode, entry.taskId, detailText(entry)].join(" ").toLowerCase();
     return hay.includes(state.query);
   }
 
@@ -88,17 +101,27 @@
     changed = setAttr(node, "data-seq", entry.seq) || changed;
     if (node.dataset.built !== "1") {
       node.className = "logrow";
-      node.innerHTML = `<span class="ts"></span><span class="lv"></span><span class="ev"></span><span class="dt"></span>`;
+      node.innerHTML = `<span class="ts"></span><span class="lv"></span><span class="ev-name"><span></span><small></small></span><span class="dt"></span>`;
       node.dataset.built = "1";
     }
-    const [ts, lv, ev, dt] = $$(".ts, .lv, .ev, .dt", node);
+    const level = String(entry.level || "info");
+    changed = setAttr(node, "data-level", level) || changed;
+    const ts = node.querySelector(".ts");
+    const lv = node.querySelector(".lv");
+    const [event, project] = node.querySelector(".ev-name").children;
     changed = setText(ts, fmtTime(entry.ts)) || changed;
-    changed = setText(lv, entry.level) || changed;
-    lv.className = `lv ${String(entry.level)}`;
-    changed = setText(ev, `${entry.event}${entry.projectCode ? ` · ${entry.projectCode}` : ""}`) || changed;
-    const text = typeof entry.detail === "string" ? entry.detail : JSON.stringify(entry.detail ?? "");
-    changed = setText(dt, text) || changed;
+    changed = setAttr(ts, "title", entry.ts || "") || changed;
+    changed = setText(lv, level) || changed;
+    lv.className = `lv ${level}`;
+    changed = setText(event, entry.event || "—") || changed;
+    changed = setText(project, entry.projectCode || "") || changed;
+    project.hidden = !entry.projectCode;
+    changed = setText(node.querySelector(".dt"), detailText(entry)) || changed;
     return changed;
+  }
+
+  function visible() {
+    return state.entries.filter(matches);
   }
 
   function render() {
@@ -109,16 +132,21 @@
     renderKeyed(table, ordered.slice(0, 600), renderRow, (entry) => String(entry.seq));
     $("#emptyState").hidden = rows.length > 0;
     table.hidden = rows.length === 0;
-    setText($("#logMeta"), `${rows.length} 条 · 最新 seq ${state.lastSeq}`);
+    if (state.follow) table.scrollTop = 0;
+    setText($("#logMeta"), `${rows.length} 条${rows.length > 600 ? "（显示最新 600）" : ""} · 最新 seq ${state.lastSeq}`);
   }
 
-  function visible() {
-    return state.entries.filter(matches);
-  }
-
+  // The initial /api/logs page and the SSE backlog can overlap; seq is unique.
+  const seen = new Set();
   function append(entries) {
+    entries = entries.filter((entry) => {
+      const key = String(entry.seq);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     if (!entries.length) return;
-    state.entries = [...state.entries, ...entries];
+    state.entries = [...state.entries, ...entries].sort((a, b) => Number(a.seq) - Number(b.seq));
     if (state.entries.length > 4000) state.entries = state.entries.slice(-4000);
     state.lastSeq = Math.max(state.lastSeq, Number(entries[entries.length - 1].seq) || 0);
     render();
@@ -135,7 +163,18 @@
     state.query = event.target.value.trim().toLowerCase();
     render();
   }, 150));
-  $("#followToggle").addEventListener("change", (event) => { state.follow = event.target.checked; });
+  $("#followToggle").addEventListener("change", (event) => {
+    state.follow = event.target.checked;
+    if (state.follow) $("#logTable").scrollTop = 0;
+  });
+  // Scrolling down to read older entries pauses following; back at the top resumes it.
+  $("#logTable").addEventListener("scroll", debounce(() => {
+    const atTop = $("#logTable").scrollTop < 8;
+    if (atTop !== state.follow) {
+      state.follow = atTop;
+      $("#followToggle").checked = atTop;
+    }
+  }, 120));
   $("#clearBtn").addEventListener("click", () => { state.entries = []; render(); });
 
   async function setMode(mode) {
@@ -162,7 +201,6 @@
   function applySnapshot(payload) {
     state.snapshot = payload;
     renderRail({ ...payload, connected: state.connected, error: state.error });
-    renderMetrics(payload);
   }
 
   connectStream({
@@ -173,7 +211,6 @@
       if (payload.summary) state.snapshot.summary = payload.summary;
       if (payload.containers) state.snapshot.containers = payload.containers;
       renderRail({ ...state.snapshot, connected: state.connected, error: state.error });
-      renderMetrics(state.snapshot);
     },
     onLog: (payload) => append(payload.entries || []),
     onStatus: ({ connected, error }) => {

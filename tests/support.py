@@ -28,7 +28,6 @@ def make_config(root: Path, **overrides) -> dict:
             "scheduleMode": "containers",
             "maxContainers": 4,
             "candidatesPerTask": 2,
-            "containerRefillBelow": 3,
         },
     })
     config["_configPath"] = str(root / "config.json")
