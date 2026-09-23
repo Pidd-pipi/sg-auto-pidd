@@ -144,7 +144,7 @@ class QueueBasicsTests(SchedulerTestCase):
 
 
 class ContainerGateTests(SchedulerTestCase):
-    """The old gate compared running >= refillBelow and stalled five early."""
+    """The monitor bounds tasks; the skill lock bounds candidate containers."""
 
     def _queue(self, docker_items, **cfg):
         config = make_config(self.root)
@@ -177,46 +177,31 @@ class ContainerGateTests(SchedulerTestCase):
         self.assertEqual(detail["estimatedNonTestContainers"], 0)
         self.assertEqual(detail["containerGroups"], [])
 
-    def test_one_free_slot_is_enough_to_start(self):
-        """The executor queues overflow, so the monitor need not fit the batch.
-
-        Requiring room for all ``candidatesPerTask`` containers could only fire
-        at two containers against a limit of four, so the count oscillated
-        2↔4 and never sat at four.
-        """
-        queue = self._queue(self._running(3), maxContainers=4, candidatesPerTask=2, containerRefillBelow=4)
+    def test_running_container_count_does_not_block_task_admission(self):
+        queue = self._queue(
+            self._running(4),
+            capacity=3,
+            maxContainers=4,
+            candidatesPerTask=2,
+            containerRefillBelow=4,
+        )
         item = platform_item()
         queue._items = [item]
         queue._save()
         tick_with_ready_runner(queue, self.root)
-        # The worker is not startable in a test, so the item stays pending — but it
-        # must not be parked on any container-wait message.
+        self.assertEqual(item["status"], "running")
         self.assertEqual(str(item.get("containerWait") or ""), "")
 
-    def test_waits_when_no_slot_is_free(self):
-        queue = self._queue(self._running(4), maxContainers=4, candidatesPerTask=2, containerRefillBelow=4)
-        item = platform_item()
-        queue._items = [item]
+    def test_task_capacity_still_blocks_additional_workers(self):
+        active = platform_item(id="platform-active", status="triggered", capacityHeld=True)
+        pending = platform_item(id="platform-pending")
+        queue = self._queue([], capacity=1)
+        queue._items = [active, pending]
         queue._save()
-        queue.tick()
-        self.assertIn("容器已满", str(item.get("containerWait") or ""))
 
-    def test_waits_at_the_hard_limit_even_with_a_batch_of_one(self):
-        queue = self._queue(self._running(6), maxContainers=6, candidatesPerTask=2, containerRefillBelow=6)
-        item = platform_item()
-        queue._items = [item]
-        queue._save()
-        queue.tick()
-        self.assertIn("容器已满", str(item.get("containerWait") or ""))
+        tick_with_ready_runner(queue, self.root)
 
-    def test_refill_below_below_the_limit_still_gates(self):
-        """A threshold under the hard limit is a deliberate headroom knob."""
-        queue = self._queue(self._running(4), maxContainers=6, candidatesPerTask=2, containerRefillBelow=3)
-        item = platform_item()
-        queue._items = [item]
-        queue._save()
-        queue.tick()
-        self.assertIn("补位阈值", str(item.get("containerWait") or ""))
+        self.assertEqual(pending["status"], "pending")
 
 
 class StartupGuardTests(SchedulerTestCase):
@@ -630,7 +615,7 @@ class ReconcileTests(SchedulerTestCase):
 
 
 class SlotLifecycleTests(SchedulerTestCase):
-    """A claimed task takes slots, and gives them back when its containers appear."""
+    """The monitor delegates per-container admission to the skill limiter."""
 
     def _queue(self):
         return build_queue(self.config)
@@ -642,21 +627,16 @@ class SlotLifecycleTests(SchedulerTestCase):
             return_value=(Path("/tmp/fake-sologsb.py"), Path("/tmp/queue_worker.py"), [self.root]),
         )
 
-    def test_claim_reserves_one_slot_per_candidate(self):
+    def test_task_start_does_not_create_monitor_reservations(self):
         queue = self._queue()
         queue.add_platform({"code": "gb-7", "name": "示例", "variantId": "v1",
                             "quotaBefore": {"remaining": 3}})
         with self._ready_runner(queue), mock.patch.object(queue.jobs, "start_platform", return_value={"pid": 1234}):
             queue.tick()
-        markers = queue._items[0].get("slotMarkers") or []
-        self.assertEqual(len(markers), self.config["automation"]["candidatesPerTask"])
-        self.assertEqual(queue.slots.snapshot()["occupiedCount"], len(markers))
-        # The marker files carry the fields _ContainerLimiter reads.
-        data = json.loads(Path(markers[0]).read_text(encoding="utf-8"))
-        self.assertEqual(data["projectCode"], "gb-7")
-        self.assertIn("container", data)
-        self.assertIn("pid", data)
-        self.assertIn("createdAt", data)
+        self.assertEqual(queue._items[0]["status"], "running")
+        self.assertEqual(queue._items[0]["slotMarkers"], [])
+        self.assertEqual(queue._items[0]["slotReservedAt"], "")
+        self.assertEqual(queue.slots.snapshot()["occupiedCount"], 0)
 
     def test_failed_start_releases_its_reservations(self):
         queue = self._queue()
@@ -671,28 +651,8 @@ class SlotLifecycleTests(SchedulerTestCase):
         self.assertFalse(item["capacityHeld"])
         self.assertEqual(queue.slots.snapshot()["occupiedCount"], 0)
 
-    def test_reserve_batch_replaces_old_markers_for_the_same_item(self):
-        queue = self._queue()
-        first = queue.slots.reserve_batch(
-            count=2,
-            container_prefix="sologsb-gb-7",
-            project_code="gb-7",
-            item_id="platform-7",
-        )
-        second = queue.slots.reserve_batch(
-            count=2,
-            container_prefix="sologsb-gb-7",
-            project_code="gb-7",
-            item_id="platform-7",
-        )
-
-        self.assertEqual(len(first), 2)
-        self.assertEqual(len(second), 2)
-        self.assertTrue(set(first).isdisjoint(second))
-        self.assertEqual(queue.slots.snapshot()["occupiedCount"], 2)
-
-    def test_reconcile_releases_markers_for_inactive_items(self):
-        queue = build_queue(self.config, items=[platform_item(status="pending")])
+    def test_reconcile_removes_legacy_monitor_reservations(self):
+        queue = build_queue(self.config, items=[platform_item(status="triggered", capacityHeld=True)])
         markers = queue.slots.reserve_batch(
             count=2,
             container_prefix="sologsb-gb-1",
@@ -706,7 +666,7 @@ class SlotLifecycleTests(SchedulerTestCase):
         loop = ReconcileLoop(queue, queue.jobs, log=None, platform=None)
         actions = loop.run_once()
 
-        self.assertTrue(any(action["kind"] == "inactive-reservations" for action in actions))
+        self.assertTrue(any(action["kind"] == "legacy-monitor-reservations" for action in actions))
         self.assertEqual(queue._items[0]["slotMarkers"], [])
         self.assertEqual(queue._items[0]["slotReservedAt"], "")
         self.assertEqual(queue.slots.snapshot()["occupiedCount"], 0)
@@ -734,34 +694,9 @@ class SlotLifecycleTests(SchedulerTestCase):
         loop = ReconcileLoop(queue, queue.jobs, log=None, platform=None)
         actions = loop.run_once()
 
-        self.assertTrue(any(action["kind"] == "inactive-reservations" for action in actions))
+        self.assertTrue(any(action["kind"] == "legacy-monitor-reservations" for action in actions))
         self.assertEqual(queue._items[0]["slotMarkers"], [])
         self.assertEqual(queue._items[0]["slotReservedAt"], "")
-
-    def test_containers_appearing_releases_the_placeholders(self):
-        queue = self._queue()
-        queue.add_platform({"code": "gb-7", "name": "示例", "variantId": "v1"})
-        with self._ready_runner(queue), mock.patch.object(queue.jobs, "start_platform", return_value={"pid": 1234}):
-            queue.tick()
-        self.assertTrue(queue._items[0]["slotMarkers"])
-        task_root = self.root / "tasks" / "gb-7-20260920-120000-abc"
-        task_root.mkdir(parents=True, exist_ok=True)
-        queue._items[0]["taskRoot"] = str(task_root)
-        queue.docker_cache = fake_docker([
-            {"name": "sologsb-gb-7-20260920-120000-abc-candidate-1-1790000000-abc", "state": "running"},
-        ])
-        queue._sync_running_locked()
-        self.assertEqual(queue._items[0]["slotMarkers"], [])
-        self.assertEqual(queue.slots.snapshot()["occupiedCount"], 0)
-
-    def test_release_for_item_clears_every_marker(self):
-        queue = self._queue()
-        queue.add_platform({"code": "gb-7", "name": "示例", "variantId": "v1"})
-        with self._ready_runner(queue), mock.patch.object(queue.jobs, "start_platform", return_value={"pid": 1234}):
-            queue.tick()
-        item_id = queue._items[0]["id"]
-        self.assertTrue(queue.slots.release_for_item(item_id))
-        self.assertEqual(queue.slots.snapshot()["occupiedCount"], 0)
 
 
 class QuotaLedgerTests(SchedulerTestCase):

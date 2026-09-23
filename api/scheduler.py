@@ -2623,66 +2623,13 @@ class QueueManager:
                            detail=str(capacity_detail.get("error") or "docker ps 失败"))
                 return actions
 
-            hard_limit = self._max_containers_limit()
-            batch = self._candidates_per_task()
-            # Both container gates use the estimated count (running containers
-            # plus this monitor's own reservations) so a claimed-but-not-started
-            # task is accounted for exactly as the skill's limiter accounts for it.
-            estimated_current = int(capacity_detail.get("estimatedNonTestContainers") or 0)
-            refill_below = self.effective_refill_below()
-
-            if mode == SCHEDULE_MODE_TASKS:
-                # Task-count mode: capacity is the only gate; each task still gets
-                # a startup reservation that expires after startupTimeoutSeconds.
-                if capacity_in_use >= capacity:
-                    self._capacity_saturated = True
-                    return actions
-            else:
-                # Container mode: start as soon as one slot is free.
-                #
-                # The gate used to require room for the whole batch
-                # (``est + candidatesPerTask > hard``), which with a batch of 2
-                # against a limit of 4 could only fire at two containers — so the
-                # count oscillated 2↔4 and never sat at 4.  The executor's
-                # ``_ContainerLimiter`` queues candidates once the limit is
-                # reached, so the monitor only has to keep one slot open and let
-                # the skill absorb the overflow.
-                if hard_limit > 0 and estimated_current + 1 > hard_limit:
-                    changed = False
-                    for pending_item in self._items:
-                        if pending_item.get("status") != "pending" or pending_item.get("source") != "platform":
-                            continue
-                        pending_item["containerWait"] = (
-                            f"容器已满：当前预计 {estimated_current} 个，硬上限 {hard_limit}，"
-                            f"技能侧将在 {hard_limit} 个时排队"
-                        )
-                        pending_item["error"] = pending_item["containerWait"]
-                        changed = True
-                        break
-                    if changed:
-                        self._save()
-                    return actions
-                if capacity_in_use >= capacity:
-                    self._capacity_saturated = True
-                    return actions
-                # The refill threshold is the top-up target.  Clamped to the hard
-                # limit, so this agrees with the gate above rather than
-                # short-circuiting it.
-                if estimated_current >= refill_below:
-                    changed = False
-                    for pending_item in self._items:
-                        if pending_item.get("status") != "pending" or pending_item.get("source") != "platform":
-                            continue
-                        pending_item["containerWait"] = (
-                            f"当前预计 {estimated_current} 个容器，"
-                            f"达到补位阈值 {refill_below}，等有空位再启动"
-                        )
-                        pending_item["error"] = pending_item["containerWait"]
-                        changed = True
-                        break
-                    if changed:
-                        self._save()
-                    return actions
+            # Container admission belongs to the skill's cross-process
+            # ``_ContainerLimiter``.  The monitor only bounds how many tasks may
+            # be in flight, then each task's candidate containers acquire the
+            # global execution lock one by one when they are actually launched.
+            if capacity_in_use >= capacity:
+                self._capacity_saturated = True
+                return actions
 
             try:
                 self.jobs.validate_platform_runner()
@@ -2702,14 +2649,8 @@ class QueueManager:
                     self._emit("warning", "queue.runner_unavailable", detail=error)
                 return actions
             for item in self._items:
-                if mode == SCHEDULE_MODE_TASKS:
-                    if capacity_in_use >= capacity:
-                        break
-                else:
-                    if capacity_in_use >= capacity:
-                        break
-                    if hard_limit > 0 and estimated_current + 1 > hard_limit:
-                        break
+                if capacity_in_use >= capacity:
+                    break
                 if item.get("status") != "pending":
                     continue
                 next_attempt = parse_time(item.get("nextAttemptAt"))
@@ -2723,22 +2664,12 @@ class QueueManager:
                         continue
                     claimed_at = utc_now()
                     item_id = str(item.get("id") or "")
-                    run_key = str(item.get("runKey") or "")
                     if platform is not None:
                         try:
                             self.claim_quota(item, platform)
                         except Exception as exc:
                             self._emit("warning", "quota.claim_failed", taskId=item_id,
                                        projectCode=str(item.get("projectCode") or ""), detail=str(exc))
-                    # Take the container slots before the worker starts so the
-                    # executor sees the claim and waits rather than oversubscribing.
-                    slot_markers = self.slots.reserve_batch(
-                        count=self._candidates_per_task(),
-                        container_prefix=f"sologsb-{safe_slug(item.get('projectCode') or 'platform')}",
-                        project_code=str(item.get("projectCode") or ""),
-                        item_id=item_id,
-                        run_key=run_key,
-                    )
                     item.update({
                         "status": "launching",
                         "scopeRoot": item.get("scopeRoot") or self._default_scope_root_locked(),
@@ -2748,8 +2679,8 @@ class QueueManager:
                         "orphaned": False,
                         "error": "",
                         "containerWait": "",
-                        "slotMarkers": slot_markers,
-                        "slotReservedAt": claimed_at,
+                        "slotMarkers": [],
+                        "slotReservedAt": "",
                     })
                     self._save()
                     try:
@@ -2792,7 +2723,6 @@ class QueueManager:
                     self._lastStartedAt = utc_now()
                     actions.append({"item": copy.deepcopy(item), "job": job})
                     capacity_in_use += 1
-                    estimated_current += batch
                     if capacity_in_use >= capacity:
                         self._capacity_saturated = True
                     self._emit("info", "queue.started", taskId=str(item.get("id") or ""),
@@ -2957,8 +2887,7 @@ class ReconcileLoop:
     def run_once(self) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
         actions.extend(self._sweep_dead_markers())
-        actions.extend(self._release_inactive_reservations())
-        actions.extend(self._release_stale_reservations())
+        actions.extend(self._release_legacy_monitor_reservations())
         actions.extend(self._release_terminal_containers())
         actions.extend(self._release_stuck_orphans())
         actions.extend(self._guard_attempt_inflation())
@@ -2977,32 +2906,21 @@ class ReconcileLoop:
         self._emit("reconcile.dead_markers", detail=f"清理失效槽位标记 {len(removed)} 个", count=len(removed))
         return [{"kind": "dead-markers", "paths": removed}]
 
-    def _release_inactive_reservations(self) -> list[dict[str, Any]]:
-        """Release live-PID reservations that no active queue item owns.
+    def _release_legacy_monitor_reservations(self) -> list[dict[str, Any]]:
+        """Remove the monitor's old bulk reservations.
 
-        Older versions could leave markers behind when ``start_platform``
-        failed after reserving slots.  Those markers keep counting until the
-        scheduler process exits, so clean them up even while the queue is
-        paused or otherwise not launching new work.
+        Container admission is now owned exclusively by the skill's
+        per-container ``_ContainerLimiter``.  Markers carrying a queue ``itemId``
+        are legacy monitor reservations and must not keep the queue blocked.
+        Executor-owned markers have no ``itemId`` and are left untouched.
         """
         removed: list[str] = []
         changed = False
         with self.queue._lock:
             items = {str(item.get("id") or ""): item for item in self.queue._items}
-            active_ids = {
-                item_id
-                for item_id, item in items.items()
-                if item_id and (
-                    str(item.get("status") or "") in QUEUE_ACTIVE_STATUSES
-                    or bool(item.get("capacityHeld"))
-                )
-            }
             for path, data in self.queue.slots._read_markers():
                 item_id = str(data.get("itemId") or "")
-                # Executor-owned markers do not carry a queue item id.  Leave
-                # those to the executor/limiter; only clean monitor-owned
-                # reservations here.
-                if not item_id or item_id in active_ids:
+                if not item_id:
                     continue
                 path_text = str(path)
                 if not self.queue.slots.release(path):
@@ -3033,54 +2951,11 @@ class ReconcileLoop:
             return []
         if removed:
             self._emit(
-                "reconcile.inactive_reservations",
-                detail=f"清理无活动队列项的槽位标记 {len(removed)} 个",
+                "reconcile.legacy_monitor_reservations",
+                detail=f"清理监控台旧版预占位 {len(removed)} 个",
                 count=len(removed),
             )
-        return [{"kind": "inactive-reservations", "paths": removed, "queueChanged": changed}]
-
-    def _release_stale_reservations(self) -> list[dict[str, Any]]:
-        """A claimed slot with no container after the reserve window."""
-        reserve_seconds = self.queue._container_reserve_seconds()
-        out: list[dict[str, Any]] = []
-        with self.queue._lock:
-            for item in list(self.queue._items):
-                if item.get("source") != "platform":
-                    continue
-                if not item.get("slotMarkers") or str(item.get("status") or "") not in {"launching", "running"}:
-                    continue
-                item_id = str(item.get("id") or "")
-                marker = self.queue.slots.item_slot(item_id)
-                if marker is None:
-                    # The real containers already replaced the reservation.
-                    continue
-                age = marker.get("ageSeconds")
-                if age is None or age < reserve_seconds:
-                    continue
-                run_key = str(item.get("runKey") or "")
-                terminated = self.jobs.terminate_platform(item_id, reason=f"容器预占位 {int(age)} 秒未产生容器，已终止")
-                self.queue.slots.release_for_item(item_id)
-                if self.platform is not None:
-                    self.queue.refund_quota(item, self.platform, f"容器预占位 {int(age)} 秒超时")
-                item.update({
-                    "status": "pending",
-                    "claimedAt": "",
-                    "startedAt": "",
-                    "jobPid": "",
-                    "capacityHeld": False,
-                    "slotMarkers": [],
-                    "slotReservedAt": "",
-                    "runKey": run_key or uuid.uuid4().hex[:10],
-                    "nextAttemptAt": "",
-                    "error": f"容器预占位 {int(age)} 秒未产生容器，已终止并重新入队",
-                    "notice": f"容器预占位 {int(age)} 秒超时，已重新入队",
-                })
-                self.queue._save()
-                out.append({"kind": "reservation-timeout", "itemId": item_id, "ageSeconds": age, "terminated": terminated})
-                self._emit("reconcile.reservation_timeout", taskId=item_id,
-                           projectCode=str(item.get("projectCode") or ""),
-                           detail=f"预占位 {int(age)} 秒无容器，已终止并重新入队")
-        return out
+        return [{"kind": "legacy-monitor-reservations", "paths": removed, "queueChanged": changed}]
 
     def _release_terminal_containers(self) -> list[dict[str, Any]]:
         """Remove containers belonging to a queue item that reached a terminal state.

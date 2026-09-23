@@ -76,17 +76,13 @@ static/              app.css / app.js + 四个页面，原生 JS，无构建链
 | `containers`（容器优先，默认） | 运行中的候选容器数 | 并行任务数 | Key 并发是瓶颈，想让容器跑满 |
 | `tasks`（任务数量优先） | 并行任务数 | 运行中的候选容器数 | 想控制同时进行的题目数 |
 
-两种模式共用同一条等待规则：**预计当前数量 + 本批候选数 > 硬上限**时才等待。
-早期实现用 `运行中 >= containerRefillBelow` 判断，会在距离硬上限还差一个批次时就停摆
-（硬上限 6、阈值 5 时，第 5 个容器一出现队列就不再启动）。
+监控台只限制**同时在飞的任务数**。任务被领取后直接启动对应执行器，不再按
+`candidatesPerTask` 批量预占容器槽；每个候选真正执行 `docker run` 前，由技能侧的
+`side_runner._ContainerLimiter` 通过跨进程文件锁依次取得容器名额。这样多个任务可以并行
+推进提示词和初始化，而候选容器仍严格受全局上限约束，不会因一个任务的整批预占位阻塞队列。
 
-### 容器槽位账本
-
-任务被领取的瞬间就按 `candidatesPerTask` 写入占位标记到
-`~/.codex/sologsb-0917/container-slots/reservations/`，文件字段与
-`side_runner._ContainerLimiter` 完全一致（`container` / `projectCode` / `pid` /
-`createdAt`），因此执行器和监控台读到的是同一批文件，不会各算一套名额。
-任务的真实容器出现在 `docker ps` 后，占位标记立即释放，避免重复计数。
+旧版本监控台写入的带 `itemId` 预占位会在纠错循环中自动清理；技能执行器自己的
+per-container 预占位不带 `itemId`，不会被监控台误删。
 
 ## 配额生命周期
 
@@ -130,10 +126,10 @@ claimed  → refunded  失败/中止，POST /api/v1/tasks/{id}/cancel 回补，�
 - `server.host` / `server.port` / `server.allowRemoteActions`。
 - `automation.scheduleMode`：`containers` 或 `tasks`。
 - `automation.capacity`（= `maxTasks`）：并行任务数上限。
-- `automation.maxContainers`：候选容器硬上限，与 `keyConcurrency.maxCandidateContainers`
-  取较小值生效。
+- `automation.maxContainers`：监控台展示用候选容器上限；实际容器准入由技能设备配置
+  `claude.maxContainers` 和 `side_runner._ContainerLimiter` 执行。
 - `automation.candidatesPerTask`：单任务备选容器数。
-- `automation.containerRefillBelow`：补位阈值（容器优先模式下额外生效）。
+- `automation.containerRefillBelow`：旧版监控台补位阈值，当前不再参与容器准入。
 - `automation.startupTimeoutSeconds`（300–600）/ `automation.containerReserveSeconds`（300–600）。
 - `automation.reconcileSeconds`（15–3600）。
 - `automation.promptTemplate`：占位符
