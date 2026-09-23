@@ -2099,6 +2099,7 @@ class QueueManager:
         trigger_prompt: str = "",
         folder_id: str = "",
         folder_path: str = "",
+        allow_duplicate: bool = False,
     ) -> dict[str, Any]:
         project_code = str(project.get("code") or "").strip()
         if not project_code:
@@ -2114,12 +2115,15 @@ class QueueManager:
             raise MonitorError("队列 side 只能为 A、B 或 both")
         side = side.upper() if side in {"a", "b"} else "both"
         with self._lock:
-            if any(
-                item.get("source") == "platform"
+            same_project = [
+                item for item in self._items
+                if item.get("source") == "platform"
                 and str(item.get("projectCode") or "").casefold() == project_code.casefold()
-                and item.get("status") in ({"pending"} | QUEUE_ACTIVE_STATUSES)
-                for item in self._items
-            ):
+            ]
+            if allow_duplicate:
+                if any(item.get("status") in QUEUE_ACTIVE_STATUSES or item.get("capacityHeld") for item in same_project):
+                    raise MonitorError(f"项目 {project_code} 已有任务正在运行")
+            elif any(item.get("status") in ({"pending"} | QUEUE_ACTIVE_STATUSES) for item in same_project):
                 raise MonitorError(f"项目 {project_code} 已在队列中或正在运行")
             quota_before = project.get("quotaBefore") if isinstance(project.get("quotaBefore"), dict) else {}
             item = {
@@ -3089,6 +3093,14 @@ class QueueManager:
                     self._save()
                     self._emit("warning", "queue.runner_unavailable", detail=error)
                 return actions
+            active_project_codes = {
+                str(item.get("projectCode") or "").casefold()
+                for item in self._items
+                if item.get("source") == "platform"
+                and str(item.get("projectCode") or "").strip()
+                and (str(item.get("status") or "") in QUEUE_ACTIVE_STATUSES or item.get("capacityHeld"))
+            }
+            starting_project_codes: set[str] = set()
             for item in self._items:
                 if mode == SCHEDULE_MODE_TASKS:
                     if capacity_in_use >= capacity:
@@ -3105,6 +3117,11 @@ class QueueManager:
                         item["status"] = "failed"
                         item["error"] = "平台项目缺少 projectCode"
                         item["finishedAt"] = utc_now()
+                        continue
+                    project_code = str(item.get("projectCode") or "").casefold()
+                    if project_code in active_project_codes or project_code in starting_project_codes:
+                        item["containerWait"] = "同一项目已有任务在执行，等待其结束后再启动"
+                        item["error"] = item["containerWait"]
                         continue
                     claimed_at = utc_now()
                     item_id = str(item.get("id") or "")
@@ -3174,6 +3191,7 @@ class QueueManager:
                         "error": "",
                         "lastError": "",
                     })
+                    starting_project_codes.add(project_code)
                     self._lastStartedAt = utc_now()
                     actions.append({"item": copy.deepcopy(item), "job": job})
                     capacity_in_use += 1

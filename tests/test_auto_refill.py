@@ -18,12 +18,18 @@ from tests.support import SchedulerTestCase  # noqa: E402
 class _Platform:
     """Solo Manager stand-in: every task type offers the same fresh projects."""
 
-    def __init__(self, codes):
+    def __init__(self, codes, remaining=None):
         self.codes = codes
+        self.remaining = remaining
 
     def candidates(self, *, task_type, force=False, include_pool=False):
-        return {"items": [{"code": code, "name": f"项目 {code}", "variantId": f"v-{code}"} for code in self.codes],
-                "excluded": []}
+        items = []
+        for code in self.codes:
+            item = {"code": code, "name": f"项目 {code}", "variantId": f"v-{code}"}
+            if self.remaining is not None:
+                item["quotaBefore"] = {"remaining": self.remaining}
+            items.append(item)
+        return {"items": items, "excluded": []}
 
     def set_blocklist(self, codes):
         pass
@@ -67,6 +73,11 @@ class AutoRefillSwitchTests(SchedulerTestCase):
         self.assertEqual(saved["targetPending"], 7)
         self.assertEqual(saved["taskTypes"], ["feature迭代"])
 
+    def test_repeat_switch_persists(self):
+        snapshot = self.service.automation_action("set-auto-refill-repeat", {"enabled": True})
+        self.assertTrue(snapshot["autoRefill"]["allowRepeat"])
+        self.assertTrue(self._saved()["automation"]["autoRefill"]["allowRepeat"])
+
     def test_snapshot_exposes_interval_and_preview_size(self):
         refill = self.service.queue.fast_snapshot()["autoRefill"]
         self.assertEqual(refill["previewSize"], AUTO_REFILL_PREVIEW_SIZE)
@@ -94,6 +105,24 @@ class AutoRefillSwitchTests(SchedulerTestCase):
         last = self.service.queue.fast_snapshot()["autoRefill"]["lastRun"]
         self.assertEqual(last["added"], 3)
         self.assertIn("随机补队 3 项", last["message"])
+
+    def test_repeat_refill_uses_project_quota_as_repeat_count(self):
+        self.config["automation"]["autoRefill"].update({
+            "enabled": True,
+            "allowRepeat": True,
+            "targetPending": 5,
+            "batchSize": 5,
+            "taskTypes": ["feature迭代"],
+            "taskTypeWeights": {"feature迭代": 100},
+            "randomize": False,
+            "shuffleExisting": False,
+        })
+        self.service.platform = _Platform(["reuse"], remaining=5)
+
+        result = self.service.maybe_refill_queue()
+
+        self.assertEqual(result["added"], 5)
+        self.assertEqual([item["projectCode"] for item in self.service.queue._items], ["reuse"] * 5)
 
 
 class ShufflePendingTests(SchedulerTestCase):

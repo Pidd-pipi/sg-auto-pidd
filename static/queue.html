@@ -101,6 +101,10 @@
                     <button class="btn" id="saveWeightBtn" type="button">应用</button>
                   </div>
                 </div>
+                <label class="switch" title="允许同一项目按剩余额度重复补入；同一项目仍不会并发执行">
+                  <input type="checkbox" id="refillRepeatToggle" role="switch"><span class="track"></span>允许重复项目
+                </label>
+                <p class="hint" id="repeatHint">按项目剩余额度重复入队；若同一项目已有任务在跑，会等它结束后再启动。</p>
                 <p class="hint" id="weightHint"></p>
               </div>
             </details>
@@ -508,6 +512,8 @@
     setText($("#refillToggleText"), on ? "已开启" : "已关闭");
     setText($("#refillPill"), `自动补队 · ${on ? "开" : "关"}`);
     setAttr($("#refillPill"), "data-tone", on ? "run" : "idle");
+    const repeatToggle = $("#refillRepeatToggle");
+    if (repeatToggle) repeatToggle.checked = Boolean(refill.allowRepeat);
 
     const pending = (queue.items || []).filter((item) => item.status === "pending");
     const target = refill.targetPending || 20;
@@ -567,6 +573,20 @@
     } finally {
       state.refillBusy = false;
       renderRefill();
+    }
+  });
+
+  $("#refillRepeatToggle").addEventListener("change", async (event) => {
+    const enabled = event.target.checked;
+    event.target.disabled = true;
+    try {
+      await act("set-auto-refill-repeat", { enabled });
+      toast(enabled ? "已允许按剩余额度重复补队" : "已禁止重复项目");
+    } catch (error) {
+      event.target.checked = !enabled;
+      toast(`切换失败：${error.message}`, true);
+    } finally {
+      event.target.disabled = false;
     }
   });
 

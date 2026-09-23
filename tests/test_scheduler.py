@@ -199,7 +199,12 @@ class ContainerGateTests(SchedulerTestCase):
         item = platform_item()
         queue._items = [item]
         queue._save()
-        tick_with_ready_runner(queue, self.root)
+        with mock.patch.object(queue, "_sync_running_locked"), mock.patch.object(
+            queue.jobs,
+            "validate_platform_runner",
+            return_value=(Path("/tmp/fake-sologsb.py"), Path("/tmp/queue_worker.py"), [self.root]),
+        ), mock.patch.object(queue.jobs, "start_platform", return_value={"pid": 1234}):
+            queue.tick()
         self.assertEqual(str(item.get("containerWait") or ""), "")
 
     def test_task_mode_gates_on_live_tasks(self):
@@ -212,6 +217,28 @@ class ContainerGateTests(SchedulerTestCase):
         queue._save()
         queue.tick()
         self.assertIn("并行任务已满", str(waiting.get("containerWait") or ""))
+
+    def test_duplicate_pending_waits_for_the_same_project(self):
+        queue = self._queue([], scheduleMode="tasks", capacity=3)
+        active = platform_item(
+            id="platform-active",
+            projectCode="gb-dup",
+            status="triggered",
+            capacityHeld=True,
+        )
+        pending = platform_item(id="platform-pending", projectCode="gb-dup")
+        queue._items = [active, pending]
+        queue._save()
+
+        with mock.patch.object(queue, "_sync_running_locked"), mock.patch.object(
+            queue.jobs,
+            "validate_platform_runner",
+            return_value=(Path("/tmp/fake-sologsb.py"), Path("/tmp/queue_worker.py"), [self.root]),
+        ), mock.patch.object(queue.jobs, "start_platform", return_value={"pid": 1234}):
+            queue.tick()
+
+        self.assertEqual(pending["status"], "pending")
+        self.assertIn("同一项目已有任务在执行", str(pending.get("containerWait") or ""))
 
 
 class ContainerDemandTests(SchedulerTestCase):

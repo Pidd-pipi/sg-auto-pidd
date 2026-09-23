@@ -712,6 +712,8 @@ class SchedulerService:
             return self._set_guard(payload)
         if action == "set-auto-refill":
             return self._set_auto_refill(bool(payload.get("enabled")))
+        if action == "set-auto-refill-repeat":
+            return self._set_auto_refill_repeat(bool(payload.get("enabled")))
         if action == "set-auto-refill-weights":
             weights = payload.get("weights")
             if not isinstance(weights, dict):
@@ -887,6 +889,17 @@ class SchedulerService:
                 self._record_refill({"status": "disabled", "added": 0, "message": "已关闭，不再自动补充",
                                      "at": utc_now()})
         self.log.emit("config.auto_refill", detail=f"自动补队 → {'开启' if enabled else '关闭'}")
+        return self.queue.fast_snapshot()
+
+    def _set_auto_refill_repeat(self, enabled: bool) -> dict[str, Any]:
+        with self._queue_refill_lock:
+            self.config.setdefault("automation", {}).setdefault("autoRefill", {})["allowRepeat"] = enabled
+            self._persist_config()
+            self._last_queue_refill_at = 0.0
+        self.log.emit(
+            "config.auto_refill_repeat",
+            detail=f"自动补队重复项目 → {'允许' if enabled else '禁止'}",
+        )
         return self.queue.fast_snapshot()
 
     def _set_guard(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1215,6 +1228,7 @@ class SchedulerService:
             target = max(1, int(cfg.get("targetPending") or 20))
             target_per_type = max(0, int(cfg.get("minPendingPerTaskType") or 0))
             batch_size = max(1, int(cfg.get("batchSize") or target))
+            allow_repeat = bool(cfg.get("allowRepeat"))
             randomize = bool(cfg.get("randomize", True))
             shuffle_existing = bool(cfg.get("shuffleExisting", True))
             task_types = [str(value).strip() for value in (cfg.get("taskTypes") or []) if str(value).strip()]
@@ -1298,6 +1312,21 @@ class SchedulerService:
                 if randomize and shuffle_existing else False
             )
             effective_target = max(0, target - active_count)
+            remaining_by_type: dict[str, dict[str, int]] = {}
+            pending_demand: dict[tuple[str, str], int] = {}
+            for item in queue_items:
+                if str(item.get("status") or "") != "pending":
+                    continue
+                key = (str(item.get("taskType") or ""), str(item.get("projectCode") or "").casefold())
+                pending_demand[key] = pending_demand.get(key, 0) + 1
+            for task_type, projects in candidates_by_type.items():
+                remaining_by_type[task_type] = {}
+                for code, project in projects.items():
+                    quota = project.get("quotaBefore") if isinstance(project.get("quotaBefore"), dict) else {}
+                    raw_remaining = quota.get("remaining")
+                    remaining = 1_000_000_000 if raw_remaining is None else max(0, int(raw_remaining or 0))
+                    remaining = max(0, remaining - pending_demand.get((task_type, code), 0))
+                    remaining_by_type[task_type][code] = remaining
             tracked = self.queue.tracked_project_codes()
             added = 0
             while added < batch_size and pending < effective_target:
@@ -1324,7 +1353,8 @@ class SchedulerService:
                     choices = [
                         (code, project)
                         for code, project in candidates_by_type.get(task_type, {}).items()
-                        if code not in tracked
+                        if (allow_repeat or code not in tracked)
+                        and remaining_by_type.get(task_type, {}).get(code, 0) > 0
                     ]
                     if randomize:
                         self._refill_rng.shuffle(choices)
@@ -1355,11 +1385,20 @@ class SchedulerService:
                         trigger_prompt=prompt,
                         folder_id=str((self.settings.get() if self.settings else {}).get("defaultFolderId") or ""),
                         folder_path=str((self.settings.get() if self.settings else {}).get("defaultFolderPath") or ""),
+                        allow_duplicate=allow_repeat,
                     )
                 except MonitorError:
-                    tracked.add(code)
+                    if allow_repeat:
+                        remaining_by_type[task_type][code] = 0
+                    else:
+                        tracked.add(code)
                     continue
-                tracked.add(code)
+                if allow_repeat:
+                    remaining_by_type[task_type][code] = max(
+                        0, remaining_by_type[task_type][code] - 1
+                    )
+                else:
+                    tracked.add(code)
                 pending += 1
                 pending_by_type[task_type] = pending_by_type.get(task_type, 0) + 1
                 added += 1
@@ -1372,6 +1411,7 @@ class SchedulerService:
                 "pendingByType": pending_by_type,
                 "taskTypeWeights": task_type_weights if weighted_selection else {},
                 "targetPending": target,
+                "allowRepeat": allow_repeat,
                 "effectiveTargetPending": effective_target,
                 "activeCount": active_count,
                 "queuePaused": queue_paused,
