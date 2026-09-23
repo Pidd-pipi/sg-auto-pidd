@@ -398,6 +398,7 @@
     setText($("#queueState"), paused ? "已暂停" : "调度中");
     setAttr($("#queueState"), "data-tone", paused ? "warn" : "run");
     const containers = state.snapshot.containers || {};
+    const disk = queue.disk || {};
     setHtml($("#usageTiles"), [
       ["运行容器", containers.counted ?? counts.nonTestContainerCount ?? 0],
       ["容器上限", containers.hardLimit ?? queue.maxContainers ?? 0],
@@ -406,9 +407,11 @@
       ["等待中", waiting.length],
       ["任务并发上限", queue.maxTasks || 0],
       ["配额已扣", counts.quotaClaimed || 0],
-      ["配额回补", counts.quotaRefunded || 0],
+      ["磁盘剩余", disk.freeGB == null ? "—" : `${Math.round(disk.freeGB)} GB`],
     ].map(([label, value]) => `<div class="tile"><b>${esc(value)}</b><span>${esc(label)}</span></div>`).join(""));
-    setText($("#usageMeta"), `Docker ${containers.dockerReady ? "可用" : "不可用"}`);
+    const freed = disk.totalFreedBytes ? ` · 已清理 ${(disk.totalFreedBytes / 1024 ** 3).toFixed(1)} GB` : "";
+    setText($("#usageMeta"), `Docker ${containers.dockerReady ? "可用" : "不可用"}${disk.low ? ` · 磁盘不足 ${disk.minFreeGB} GB，暂停启动` : ""}${freed}`);
+    setAttr($("#usageMeta"), "data-tone", disk.low ? "warn" : "");
     const skill = queue.skillLimit || {};
     setText($("#limitsHint"), skill.inSync
       ? `技能执行器已同步 · 上限 ${skill.maxContainers}`

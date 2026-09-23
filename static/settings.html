@@ -257,7 +257,8 @@
       ["单任务候选数", queue.candidatesPerTask],
       ["最大任务数", queue.maxTasks],
       ["启动间隔", `${queue.cooldownSeconds || 0} 秒`],
-      ["启动时暂停队列", queue.pauseOnStart === false ? "关闭（沿用上次状态）" : "开启（每次服务启动后需手动「启动队列」）"],
+      ["重启后的队列", { never: "沿用上次状态", always: "总是暂停（需手动「启动队列」）" }[queue.pauseOnStart]
+        || "沿用上次状态；15 分钟内异常退出 2 次以上才暂停"],
       ["技能执行器", skill.inSync ? `已同步 · 上限 ${skill.maxContainers}` : "未同步"],
     ]));
     setText($("#modeMeta"), queue.scheduleMode === "containers"

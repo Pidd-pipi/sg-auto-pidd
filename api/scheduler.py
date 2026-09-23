@@ -90,6 +90,7 @@ except Exception:  # pragma: no cover - only hit when running from a stripped co
     LogWriter = None  # type: ignore[assignment]
 
 from .tasks import discover_task_roots, task_container_names  # noqa: E402  (kept last to avoid a cycle)
+from .housekeeping import free_gb, housekeeping_settings  # noqa: E402
 
 CONTAINER_SLOT_ROOT = Path(
     os.environ.get(
@@ -974,6 +975,9 @@ class QueueManager:
         self.refill_status: dict[str, Any] = {"status": "idle", "message": "尚未运行", "at": ""}
         # Last round of the fallback policies (api/guard.py), set by TaskGuard.
         self.guard_status: dict[str, Any] = {}
+        # Cleanup totals since start (api/housekeeping.py), set by Housekeeper.
+        self.housekeeping_status: dict[str, Any] = {}
+        self._disk_low = False
         self._lock = threading.RLock()
         self._triggered: list[dict[str, Any]] = []
         self._lastStartedAt = ""
@@ -1773,6 +1777,22 @@ class QueueManager:
             "scheduleMode": self._schedule_mode(),
         }
 
+    # -- disk ------------------------------------------------------------- #
+    def disk_free_gb(self) -> float | None:
+        """Free space where new tasks are written (lowest among active roots)."""
+        values = [value for value in (free_gb(root) for root in self._active_roots_locked() or self._roots_locked())
+                  if value is not None]
+        return min(values) if values else None
+
+    def disk_status(self) -> dict[str, Any]:
+        free = self.disk_free_gb()
+        return {
+            "freeGB": round(free, 1) if free is not None else None,
+            "minFreeGB": housekeeping_settings(self.config)["minFreeGB"],
+            "low": self._disk_low,
+            **self.housekeeping_status,
+        }
+
     # -- snapshots -------------------------------------------------------- #
     def active_roots(self) -> list[str]:
         with self._lock:
@@ -1831,13 +1851,14 @@ class QueueManager:
             "cooldownRemainingSeconds": 0,
             "lastStartedAt": last_started,
             "paused": paused,
-            "pauseOnStart": bool(self._automation_cfg().get("pauseOnStart", True)),
+            "pauseOnStart": {True: "always", False: "never"}.get(self._automation_cfg().get("pauseOnStart", "crash-loop"), str(self._automation_cfg().get("pauseOnStart") or "crash-loop")),
             "promptTemplate": prompt_template,
             "items": items,
             "counts": counts,
             "capacityInUse": counts["running"],
             "autoRefill": {**public_auto_refill_config(self.config), "lastRun": dict(self.refill_status)},
             "guard": dict(self.guard_status),
+            "disk": self.disk_status(),
             "capacityMode": "fast",
             "containerGroups": [],
             "startupReservations": [],
@@ -1999,7 +2020,7 @@ class QueueManager:
             "cooldownRemainingSeconds": round(cooldown_remaining, 1),
             "lastStartedAt": self._lastStartedAt,
             "paused": bool(self._automation_cfg().get("paused", True)),
-            "pauseOnStart": bool(self._automation_cfg().get("pauseOnStart", True)),
+            "pauseOnStart": {True: "always", False: "never"}.get(self._automation_cfg().get("pauseOnStart", "crash-loop"), str(self._automation_cfg().get("pauseOnStart") or "crash-loop")),
             "promptTemplate": str(self._automation_cfg().get("promptTemplate") or ""),
             "items": items,
             "counts": {
@@ -2023,6 +2044,7 @@ class QueueManager:
             "capacityInUse": capacity_in_use,
             "autoRefill": {**public_auto_refill_config(self.config), "lastRun": dict(self.refill_status)},
             "guard": dict(self.guard_status),
+            "disk": self.disk_status(),
             "capacityMode": capacity_detail.get("mode"),
             "containerGroups": capacity_detail.get("containerGroups") or [],
             "startupReservations": capacity_detail.get("startupReservations") or [],
@@ -3006,6 +3028,17 @@ class QueueManager:
             if last_started and time.time() - last_started.timestamp() < spacing:
                 ready_at = iso_from_timestamp(last_started.timestamp() + spacing)
                 return hold(f"启动间隔 {spacing} 秒，约 {ready_at[11:19]} UTC 后启动下一个", "spacing")
+            free = self.disk_free_gb()
+            min_free = housekeeping_settings(self.config)["minFreeGB"]
+            if free is not None and free < min_free:
+                if not self._disk_low:
+                    self._disk_low = True
+                    self._emit("warning", "queue.disk_low",
+                               detail=f"磁盘剩余 {free:.1f} GB，低于 {min_free:g} GB，暂停启动新任务")
+                return hold(f"磁盘剩余 {free:.0f} GB，低于 {min_free:g} GB：暂停启动，清理出空间后自动继续", "gate")
+            if self._disk_low:
+                self._disk_low = False
+                self._emit("info", "queue.disk_recovered", detail=f"磁盘剩余 {free:.1f} GB，恢复启动")
             capacity_in_use, capacity_detail = self._capacity_usage_locked(startup_timeout)
             if not bool(capacity_detail.get("dockerReady", False)):
                 if not self._docker_down:
@@ -3282,6 +3315,7 @@ class ReconcileLoop:
         self.last_actions: list[dict[str, Any]] = []
         self.health: Any = None  # LoopHealth, injected by the service
         self.guard: Any = None  # TaskGuard, injected by the service
+        self.housekeeper: Any = None  # Housekeeper, injected by the service
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -3330,6 +3364,7 @@ class ReconcileLoop:
         actions.extend(self._force_settle_stale_quota())
         actions.extend(self._resync_from_result())
         actions.extend(self._run_guard())
+        actions.extend(self._run_housekeeping())
         self.last_run_at = utc_now()
         self.last_actions = actions
         if actions:
@@ -3337,6 +3372,12 @@ class ReconcileLoop:
         return actions
 
     # -- individual checks ------------------------------------------------ #
+    def _run_housekeeping(self) -> list[dict[str, Any]]:
+        # Kicks a background round; results land in queue.housekeeping_status.
+        if self.housekeeper is not None:
+            self.housekeeper.start_background()
+        return []
+
     def _run_guard(self) -> list[dict[str, Any]]:
         """Fallback policies last, after the state machine has settled the round."""
         if self.guard is None:

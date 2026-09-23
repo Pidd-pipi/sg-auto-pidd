@@ -217,7 +217,7 @@ class LiveServerTests(unittest.TestCase):
 
 
 class PauseOnStartTests(unittest.TestCase):
-    """Every process start begins with the queue paused unless opted out."""
+    """What a process start does with a queue that was running."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -225,30 +225,77 @@ class PauseOnStartTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         (self.root / "tasks").mkdir(parents=True, exist_ok=True)
 
-    def _service(self, **automation):
+    def _service(self, *, stop=True, **automation):
         config = make_config(self.root)
         config["automation"].update(automation)
         service = SchedulerService(config)
-        self.addCleanup(service.stop)
+        if stop:
+            self.addCleanup(service.stop)
         return service, config
+
+    def _crash(self, **automation):
+        """A start whose process dies without SchedulerService.stop()."""
+        service, _config = self._service(stop=False, **automation)
+        service.log.close()
+        return service
 
     def _saved(self):
         return json.loads((self.root / "config.json").read_text(encoding="utf-8"))
 
-    def test_default_pauses_a_queue_that_was_running(self):
-        service, config = self._service(paused=False)
-        self.assertTrue(config["automation"]["paused"])
-        self.assertTrue(service.queue.snapshot()["paused"])
-        # Persisted, so config.json and the page agree.
-        self.assertTrue(self._saved()["automation"]["paused"])
-        events = [json.loads(line)["event"] for line in
-                  (self.root / ".state" / "scheduler.jsonl").read_text(encoding="utf-8").splitlines()]
-        self.assertIn("config.paused_on_start", events)
+    def _events(self):
+        return [json.loads(line)["event"] for line in
+                (self.root / ".state" / "scheduler.jsonl").read_text(encoding="utf-8").splitlines()]
 
-    def test_opt_out_keeps_the_saved_state(self):
-        service, config = self._service(paused=False, pauseOnStart=False)
+    def test_default_resumes_a_queue_that_was_running(self):
+        service, config = self._service(paused=False)
         self.assertFalse(config["automation"]["paused"])
         self.assertFalse(service.queue.snapshot()["paused"])
+        self.assertIn("config.resumed_on_start", self._events())
+
+    def test_one_crash_restart_still_resumes(self):
+        self._crash(paused=False)
+        service, config = self._service(paused=False)
+        self.assertFalse(config["automation"]["paused"])
+
+    def test_crash_loop_pauses_and_persists(self):
+        self._crash(paused=False)
+        self._crash(paused=False)
+        service, config = self._service(paused=False)
+        self.assertTrue(config["automation"]["paused"])
+        self.assertIn("异常退出 2 次", service._pause_reason)
+        self.assertTrue(self._saved()["automation"]["paused"])
+        self.assertIn("config.paused_on_start", self._events())
+
+    def test_clean_restarts_are_not_a_crash_loop(self):
+        for _ in range(4):
+            service, _config = self._service(stop=False, paused=False)
+            service.stop()
+        service, config = self._service(paused=False)
+        self.assertFalse(config["automation"]["paused"])
+
+    def test_old_crashes_age_out(self):
+        self._crash(paused=False)
+        self._crash(paused=False)
+        path = self.root / ".state" / "starts.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for entry in data["starts"]:
+            entry["at"] -= 3600
+        path.write_text(json.dumps(data), encoding="utf-8")
+        _service, config = self._service(paused=False)
+        self.assertFalse(config["automation"]["paused"])
+
+    def test_always_pauses_and_legacy_true_means_always(self):
+        for value in ("always", True):
+            with self.subTest(value=value):
+                service, config = self._service(paused=False, pauseOnStart=value)
+                self.assertTrue(config["automation"]["paused"])
+                self.assertEqual(service.queue.snapshot()["pauseOnStart"], "always")
+
+    def test_never_resumes_even_in_a_crash_loop(self):
+        self._crash(paused=False, pauseOnStart="never")
+        self._crash(paused=False, pauseOnStart="never")
+        _service, config = self._service(paused=False, pauseOnStart=False)
+        self.assertFalse(config["automation"]["paused"])
 
     def test_already_paused_queue_is_not_rewritten(self):
         service, config = self._service(paused=True)

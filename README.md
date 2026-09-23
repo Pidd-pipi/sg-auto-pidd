@@ -235,7 +235,9 @@ claimed  → refunded  失败/中止，POST /api/v1/tasks/{id}/cancel 回补，�
 - `automation.candidatesPerTask`：单任务候选数（2–8）。
 - `automation.capacity`（= `maxTasks`）：仅任务数量优先模式生效。
 - `automation.cooldownSeconds`：启动间隔（最低 20 秒）。
-- `automation.pauseOnStart`（默认 `true`）：每次服务进程启动都先把队列置为暂停并写回 `config.json`，忽略上次保存的 `paused`；崩溃自动重启、部署、重启机器后都不会在没人看的情况下拉起新任务，需在队列页手动「启动队列」。记一条 `config.paused_on_start`。设为 `false` 沿用上次状态。
+- `automation.pauseOnStart`（默认 `crash-loop`）：重启时如何处理上次的 `paused`。`crash-loop` 沿用上次状态（记 `config.resumed_on_start`），只有 15 分钟内异常退出 ≥ 2 次（上一个进程没走 `stop()`）才暂停并记 `config.paused_on_start`；启动记录在 `.state/starts.json`。`always`（旧值 `true`）每次都暂停，`never`（旧值 `false`）总是沿用。
+- `automation.waitTimeoutSeconds`：queue_worker 等桌面任务结束的上限，线上设为 14 小时（39% 的正常任务超过 4 小时）；真正卡住的交给兜底策略的「无进展」。
+- `automation.housekeeping`：磁盘门禁与清理。剩余低于 `minFreeGB`（默认 30）时暂停启动新任务（`queue.disk_low`，恢复记 `queue.disk_recovered`）。后台线程每 `intervalMinutes`（30）一批、每批最多 5 个任务，清理 `complete` 且静默超过 `afterHours`（6）、无人持有、目录下无进程的任务：删 `source/**/node_modules` 与 `monitor/verify`（state 引用的路径保留）和该任务已退出的容器，写 `monitor/housekeeping.json` 后不再扫描；磁盘低于 1.5 倍阈值时每轮都清。轨迹、视频、Excel、候选源码不动。
 - `automation.phantomDemandSeconds`：失联候选多久后不再计入占用（120–7200，默认 600）。
 - `monitor.watchdogSeconds`：进程内看门狗检查间隔（默认 30）。
 - 其余时间参数（`startupTimeoutSeconds` / `reconcileSeconds` / `startupGraceSeconds` /

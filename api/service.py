@@ -45,6 +45,7 @@ from .common import (
 )
 from .folders import FolderProvider
 from .guard import GUARD_MODES, TaskGuard, guard_settings
+from .housekeeping import Housekeeper
 from .health import LoopHealth, Watchdog
 from .logs import SchedulerLog
 from .platform import PlatformProvider, SubmissionProvider
@@ -52,6 +53,9 @@ from .scheduler import SKILL_ABSOLUTE_MAX_CONTAINERS, JobManager, QueueManager, 
 from .tasks import DockerCache, TaskScanner, TraceCache, read_trace_events
 
 HEARTBEAT_SECONDS = 10.0
+# pauseOnStart=crash-loop: this many unclean exits inside the window pause the queue.
+CRASH_LOOP_STARTS = 2
+CRASH_LOOP_WINDOW_SECONDS = 15 * 60
 DEFAULT_TICK_SECONDS = 1.5
 SSE_PING_SECONDS = 5.0
 VOLATILE_KEYS = {"updatedAt", "generatedAt", "cooldownRemainingSeconds", "fetchedAt", "lastBuildMs", "checkedAt"}
@@ -217,13 +221,6 @@ class SchedulerService:
         self.config = config
         removed = prune_legacy_automation(config.setdefault("automation", {}))
         automation = config["automation"]
-        # The queue starts paused on every process start unless the operator
-        # turned ``pauseOnStart`` off.  The saved ``paused`` is what the queue
-        # was doing when the previous process died; resuming it blindly meant a
-        # crash-restart or a deploy could launch tasks with nobody watching.
-        self._paused_on_start = bool(automation.get("pauseOnStart", True)) and not bool(automation.get("paused", True))
-        if self._paused_on_start:
-            automation["paused"] = True
         monitor_cfg = config.get("monitor") or {}
         self.file_cache = FileCache()
         self.process_table = ProcessTable(float(monitor_cfg.get("dockerCacheSeconds") or 2.0))
@@ -238,6 +235,11 @@ class SchedulerService:
         self.state_dir = Path(custom_state) if custom_state else STATE_DIR
         self._dismissed_path = self.state_dir / DISMISSED_TASKS_PATH.name
         self._auto_path = self.state_dir / AUTO_STATE_PATH.name
+        self._starts_path = self.state_dir / "starts.json"
+        self._pause_reason = self._decide_pause_on_start()
+        self._paused_on_start = bool(self._pause_reason)
+        if self._paused_on_start:
+            automation["paused"] = True
         self.log = SchedulerLog(self.state_dir / SCHEDULER_LOG_PATH.name)
         self.settings = None  # set by server once STATE_DIR is known
         self.folders = FolderProvider()
@@ -282,6 +284,8 @@ class SchedulerService:
         )
         self.guard = TaskGuard(self.queue, log=self.log, platform=self.platform)
         self.reconcile.guard = self.guard
+        self.housekeeper = Housekeeper(self.queue, log=self.log)
+        self.reconcile.housekeeper = self.housekeeper
         self._stop = threading.Event()
         self._loops: list[threading.Thread] = []
         self._auto_thread: threading.Thread | None = None
@@ -301,8 +305,58 @@ class SchedulerService:
         if self._paused_on_start:
             # Persist so config.json and the page agree on what the queue is doing.
             self._persist_config()
-            self.log.emit("config.paused_on_start",
-                          detail="启动时默认暂停队列（automation.pauseOnStart），需在队列页手动「启动队列」")
+            self.log.emit("config.paused_on_start", level="warning" if "异常退出" in self._pause_reason else "info",
+                          detail=f"{self._pause_reason}，需在队列页手动「启动队列」")
+        elif not bool(automation.get("paused", True)):
+            self.log.emit("config.resumed_on_start", detail="沿用上次状态：队列调度中（启动保护期后开始启动任务）")
+
+    # -- process starts ------------------------------------------------- #
+    def _decide_pause_on_start(self) -> str:
+        """Why this start pauses a running queue, or ``""`` to resume it.
+
+        Each start is recorded in ``starts.json``; :meth:`stop` marks it clean.
+        A start whose predecessor never marked itself clean follows a crash, a
+        kill or a hang that the keepalive had to end.  ``crash-loop`` pauses
+        only when that has happened ``CRASH_LOOP_STARTS`` times inside
+        ``CRASH_LOOP_WINDOW_SECONDS``: one crash-restart at night should carry
+        on, a service that keeps dying should stop launching work.
+        """
+        automation = self.config["automation"]
+        raw = automation.get("pauseOnStart", "crash-loop")
+        mode = {True: "always", False: "never"}.get(raw, str(raw or "crash-loop"))
+        now = time.time()
+        data = read_json(self._starts_path, {})
+        starts = [entry for entry in (data.get("starts") if isinstance(data, dict) else None) or []
+                  if isinstance(entry, dict) and now - float(entry.get("at") or 0) <= 24 * 3600]
+        crashes = sum(1 for entry in starts
+                      if not entry.get("clean") and now - float(entry.get("at") or 0) <= CRASH_LOOP_WINDOW_SECONDS)
+        starts.append({"at": now, "pid": os.getpid(), "clean": False})
+        try:
+            atomic_write_json(self._starts_path, {"starts": starts[-50:]})
+        except OSError:
+            pass
+        if bool(automation.get("paused", True)) or mode == "never":
+            return ""
+        if mode == "always":
+            return "启动时默认暂停队列（automation.pauseOnStart=always）"
+        if crashes >= CRASH_LOOP_STARTS:
+            minutes = CRASH_LOOP_WINDOW_SECONDS // 60
+            return f"{minutes} 分钟内服务异常退出 {crashes} 次，疑似崩溃循环，已暂停队列"
+        return ""
+
+    def _mark_clean_stop(self) -> None:
+        data = read_json(self._starts_path, {})
+        starts = data.get("starts") if isinstance(data, dict) else None
+        if not isinstance(starts, list):
+            return
+        for entry in reversed(starts):
+            if isinstance(entry, dict) and entry.get("pid") == os.getpid():
+                entry["clean"] = True
+                break
+        try:
+            atomic_write_json(self._starts_path, {"starts": starts})
+        except OSError:
+            pass
 
     # -- persisted small state ------------------------------------------- #
     def _load_dismissed_tasks(self) -> dict[str, dict[str, Any]]:
@@ -397,6 +451,7 @@ class SchedulerService:
         return thread
 
     def stop(self) -> None:
+        self._mark_clean_stop()
         self._stop.set()
         self.watchdog.stop()
         self.hub.stop()

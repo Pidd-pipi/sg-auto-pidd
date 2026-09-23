@@ -202,10 +202,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "difficulty": "困难",
         },
         "paused": True,
-        # Every process start begins paused (the saved ``paused`` is ignored):
-        # a service back from a crash, a deploy or a reboot should not launch
-        # tasks before an operator has looked at the queue.
-        "pauseOnStart": True,
+        # What a process start does with the saved ``paused`` (see
+        # SchedulerService._decide_pause_on_start): ``crash-loop`` resumes it
+        # unless the service keeps dying, ``always`` pauses, ``never`` resumes.
+        "pauseOnStart": "crash-loop",
         "reapOrphanWorkers": True,
         # Fallback policies (api/guard.py); ``observe`` only flags and logs.
         "guard": {
@@ -213,6 +213,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "candidatePhaseHours": 6,
             "noProgressMinutes": 60,
             "leakedProcessMinutes": 60,
+        },
+        # Disk launch gate and cleanup of finished tasks (api/housekeeping.py).
+        "housekeeping": {
+            "enabled": True,
+            "minFreeGB": 30,
+            "afterHours": 6,
+            "intervalMinutes": 30,
         },
         "promptTemplate": DEFAULT_AUTO_TRIGGER_PROMPT,
     },

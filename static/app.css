@@ -582,6 +582,7 @@ details.panel[open] > summary h3::before { transform: rotate(90deg); }
 .guard[data-mode="off"] .panel-body .grid, .guard[data-mode="off"] #saveGuardBtn { opacity: .55; }
 .guard-hits { border-top: 1px solid var(--line); }
 .guard-hits .item { padding: 10px 16px; }
+.panel-head > span[data-tone="warn"] { color: var(--warn); }
 
 /* -------------------------------------------------------------- workflow */
 .steps { display: grid; padding: 6px 16px 10px; }
